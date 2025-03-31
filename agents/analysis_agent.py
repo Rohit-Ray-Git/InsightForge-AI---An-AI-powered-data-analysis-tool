@@ -51,7 +51,7 @@ class AnalysisAgent:
             f"Missing Values: {eda_results['stats']['missing_values']}\n"
             f"Correlations:\n{eda_results['correlations']}"
         )
-        return self.llm.get_completion(prompt, max_tokens=200)  # Increased for more detail
+        return self.llm.get_completion(prompt, max_tokens=500)
 
     def analyze(self):
         """
