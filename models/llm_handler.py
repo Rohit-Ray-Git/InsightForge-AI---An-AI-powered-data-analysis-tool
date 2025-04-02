@@ -18,7 +18,7 @@ class LLMHandler:
             raise ValueError("GROQ_API_KEY is not set in the environment")
         self.client = Groq(api_key=settings.GROQ_API_KEY)
 
-    def get_completion(self, prompt, model="llama-3.3-70b-versatile", max_tokens=100):
+    def get_completion(self, prompt, model="deepseek-r1-distill-qwen-32b", max_tokens=1000):
         """
         Get a completion from the Groq LLM for the given prompt.
         
