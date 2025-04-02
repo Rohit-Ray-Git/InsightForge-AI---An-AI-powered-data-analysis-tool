@@ -4,7 +4,7 @@ from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 import pandas as pd
 from datetime import datetime
-from models.llm_handler import LLMHandler
+from models.llm_handler import LLMHandler  # Assuming this exists
 
 class ReportGenerationAgent:
     def __init__(self, output_dir: str = "data/reports"):
@@ -45,54 +45,33 @@ class ReportGenerationAgent:
         missing_values = "\n".join([f"{k}: {v}" for k, v in eda_results['stats']['missing_values'].items()])
         column_note = f"Showing {len(preview_data.columns)} of {len(data.columns)} columns; full data available in source file." if len(data.columns) > 7 else ""
 
-        # Generate insight with HTML formatting
-        insight_prompt = (
-            "Provide key insights in HTML format (use <strong> for bold, <ul><li> for lists) based on this EDA:\n"
-            f"Statistics:\n{stats_table}\n"
-            f"Missing Values:\n{missing_values}\n"
-            f"Correlations:\n{correlations}\n"
-            "Include insights on temperature, correlations, coupon redemption, direction, and the target variable Y."
-        )
-        insight = self.llm.get_completion(insight_prompt, max_tokens=300)
-
         # Prepare visualization data with descriptions
         visualizations = []
         for name, path in viz_paths.items():
             if path:
                 prompt = (
                     f"Describe this visualization in HTML format (use <strong> for bold, <ul><li> for lists): "
-                    f"{name.replace('_', ' ').title()} based on:\n"
-                    f"Statistics:\n{stats_table}\n"
-                    f"Correlations:\n{correlations}"
+                    f"{name.replace('_', ' ').title()} based on this data:\nStats:\n{stats_table}\nCorrelations:\n{correlations}"
                 )
-                description = self.llm.get_completion(prompt, max_tokens=200)
+                description = self.llm.get_completion(prompt, max_tokens=1000)
                 visualizations.append({
                     'name': name,
                     'path': os.path.basename(path),
                     'description': description
                 })
 
-        # Generate outcomes with HTML
+        # Generate outcomes and conclusion
         outcomes_prompt = (
-            "Provide actionable outcomes in HTML format (use <strong> for bold, <ul><li> for lists) based on this EDA:\n"
-            f"Statistics:\n{stats_table}\n"
-            f"Missing Values:\n{missing_values}\n"
-            f"Correlations:\n{correlations}\n"
-            f"Insight:\n{insight}\n"
-            "Focus on temperature-based strategies, data cleaning, variable optimization, and customer behavior."
+            f"Provide actionable outcomes in HTML format (use <strong> for bold, <ul><li> for lists):\n"
+            f"Stats:\n{stats_table}\nMissing Values:\n{missing_values}\nCorrelations:\n{correlations}\nInsight:\n{insight}"
         )
-        outcomes = self.llm.get_completion(outcomes_prompt, max_tokens=300)
+        outcomes = self.llm.get_completion(outcomes_prompt, max_tokens=1000)
 
-        # Generate conclusion with HTML
         conclusion_prompt = (
-            "Provide a conclusion in HTML format (use <strong> for bold, <ul><li> for lists) based on this analysis:\n"
-            f"Statistics:\n{stats_table}\n"
-            f"Correlations:\n{correlations}\n"
-            f"Insight:\n{insight}\n"
-            f"Outcomes:\n{outcomes}\n"
-            "Include a summary, actionable recommendations, and next steps."
+            f"Provide a conclusion in HTML format (use <strong> for bold, <ul><li> for lists):\n"
+            f"Stats:\n{stats_table}\nCorrelations:\n{correlations}\nInsight:\n{insight}\nOutcomes:\n{outcomes}"
         )
-        conclusion = self.llm.get_completion(conclusion_prompt, max_tokens=200)
+        conclusion = self.llm.get_completion(conclusion_prompt, max_tokens=500)
 
         today_date = datetime.now().strftime("%B %d, %Y")
 
@@ -111,10 +90,14 @@ class ReportGenerationAgent:
             today_date=today_date
         )
 
+        # Generate HTML file
         html_path = os.path.join(self.output_dir, "report.html")
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
+        # Generate PDF file
         pdf_path = os.path.join(self.output_dir, "analysis_report.pdf")
         HTML(string=html_content, base_url=self.output_dir).write_pdf(pdf_path)
-        return pdf_path
+
+        # Return both paths
+        return {'html_path': html_path, 'pdf_path': pdf_path}

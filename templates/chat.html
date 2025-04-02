@@ -1,0 +1,31 @@
+<!-- templates/chat.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>InsightForge AI - Chat</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>InsightForge AI</h1>
+            <p>Ask me anything about your data!</p>
+        </div>
+        <div class="chat-messages" id="messages">
+            <!-- Messages will be appended here -->
+        </div>
+        <div class="chat-input">
+            <form id="upload-form" enctype="multipart/form-data">
+                <input type="file" name="file" id="file-input" accept=".csv,.xlsx">
+                <button type="submit">Upload</button>
+            </form>
+            <form id="message-form">
+                <input type="text" id="message-input" placeholder="Type your question...">
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+</html>

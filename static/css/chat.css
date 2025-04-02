@@ -1,0 +1,115 @@
+/* static/css/chat.css */
+body {
+    font-family: 'Helvetica', Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f5f6f5;
+    color: #333;
+}
+
+.chat-container {
+    max-width: 800px;
+    margin: 20px auto;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+
+.chat-header {
+    background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+    color: white;
+    padding: 20px;
+    text-align: center;
+}
+
+.chat-header h1 {
+    margin: 0;
+    font-size: 28px;
+}
+
+.chat-header p {
+    margin: 5px 0 0;
+    font-size: 16px;
+    opacity: 0.9;
+}
+
+.chat-messages {
+    padding: 20px;
+    height: 400px;
+    overflow-y: auto;
+    border-bottom: 1px solid #ddd;
+}
+
+.message {
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 5px;
+    max-width: 80%;
+}
+
+.message.user {
+    background-color: #3498db;
+    color: white;
+    margin-left: auto;
+}
+
+.message.ai {
+    background-color: #ecf0f1;
+    color: #333;
+}
+
+.message.ai strong {
+    font-weight: bold;
+}
+
+.message.ai ul {
+    padding-left: 20px;
+    margin: 5px 0;
+}
+
+.message.ai li {
+    margin: 5px 0;
+}
+
+.message.ai a {
+    color: #3498db;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+.message.ai a:hover {
+    text-decoration: underline;
+}
+
+.chat-input {
+    padding: 20px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.chat-input input[type="text"] {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.chat-input input[type="file"] {
+    padding: 5px;
+}
+
+.chat-input button {
+    padding: 10px 20px;
+    background-color: #2c3e50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.chat-input button:hover {
+    background-color: #3498db;
+}
