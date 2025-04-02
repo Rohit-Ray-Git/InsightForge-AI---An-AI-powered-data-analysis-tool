@@ -3,6 +3,7 @@ from config.settings import settings
 from agents.data_ingestion_agent import ingest_data
 from agents.analysis_agent import AnalysisAgent
 from agents.visualization_agent import VisualizationAgent
+from agents.report_generation_agent import ReportGenerationAgent
 
 def main():
     """Main function to run the InsightForge AI pipeline."""
@@ -32,8 +33,13 @@ def main():
         viz_paths = visualizer.generate_visualizations()
         print("\nVisualization Files Generated:")
         for name, path in viz_paths.items():
-            if path:  # Only print if a plot was generated
+            if path:
                 print(f"{name}: {path}")
+
+        # Generate report
+        reporter = ReportGenerationAgent()
+        report_path = reporter.generate_report(data, eda_results, insight, viz_paths)
+        print(f"\nReport Generated: {report_path}")
 
     except Exception as e:
         print(f"Error: {str(e)}")

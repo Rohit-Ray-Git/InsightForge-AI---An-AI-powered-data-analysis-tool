@@ -1,0 +1,98 @@
+<!-- templates/report_template.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 1in; /* Standard PDF margins */
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #2c3e50;
+            padding-bottom: 10px;
+            text-align: center;
+        }
+        h2, h3 {
+            color: #34495e;
+            margin-top: 20px;
+        }
+        .table-striped {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            table-layout: fixed; /* Prevent column overflow */
+            word-wrap: break-word; /* Wrap long text */
+        }
+        .table-striped th, .table-striped td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+            vertical-align: top;
+            overflow-wrap: break-word; /* Ensure wrapping */
+            max-width: 0; /* Force equal column width with wrapping */
+        }
+        .table-striped th {
+            background-color: #f4f4f4;
+            font-weight: bold;
+        }
+        .table-striped tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        pre {
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 0.9em;
+            white-space: pre-wrap; /* Wrap long lines */
+            word-wrap: break-word; /* Ensure wrapping */
+        }
+        img {
+            max-width: 90%; /* Fit within page margins */
+            height: auto;
+            margin: 10px auto;
+            display: block; /* Center images */
+            page-break-inside: avoid; /* Prevent image splitting across pages */
+        }
+        @page {
+            size: A4;
+            margin: 1in;
+        }
+        /* Ensure content fits page */
+        * {
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <h1>{{ title }}</h1>
+
+    <h2>Data Preview</h2>
+    {{ data_head | safe }}
+
+    <h2>Exploratory Data Analysis</h2>
+    <h3>Statistics</h3>
+    <pre>{{ stats_table }}</pre>
+    
+    <h3>Missing Values</h3>
+    <pre>{{ missing_values }}</pre>
+    
+    <h3>Correlations</h3>
+    <pre>{{ correlations }}</pre>
+
+    <h2>AI-Generated Insight</h2>
+    <p>{{ insight }}</p>
+
+    <h2>Visualizations</h2>
+    {% for name, path in viz_paths.items() %}
+        {% if path %}
+            <h3>{{ name.replace('_', ' ').title() }}</h3>
+            <img src="{{ path }}" alt="{{ name }}">
+        {% endif %}
+    {% endfor %}
+</body>
+</html>

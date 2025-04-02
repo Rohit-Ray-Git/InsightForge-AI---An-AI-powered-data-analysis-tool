@@ -17,7 +17,7 @@ class ReportGenerationAgent:
         """
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        self.env = Environment(loader=FileSystemLoader('templates'))  # Assumes a templates/ folder
+        self.env = Environment(loader=FileSystemLoader('templates'))
 
     def generate_report(self, data: pd.DataFrame, eda_results: dict, insight: str, viz_paths: dict):
         """
@@ -38,8 +38,8 @@ class ReportGenerationAgent:
         missing_values = "\n".join([f"{k}: {v}" for k, v in eda_results['stats']['missing_values'].items()])
         correlations = eda_results['correlations']
         
-        # Convert visualization paths to absolute paths for WeasyPrint
-        abs_viz_paths = {k: os.path.abspath(v) if v else None for k, v in viz_paths.items()}
+        # Convert Windows paths to URL-friendly format (forward slashes, no "file://")
+        abs_viz_paths = {k: os.path.abspath(v).replace('\\', '/') if v else None for k, v in viz_paths.items()}
 
         # Render HTML template
         template = self.env.get_template('report_template.html')
@@ -53,12 +53,12 @@ class ReportGenerationAgent:
             viz_paths=abs_viz_paths
         )
 
-        # Write HTML to file (optional, for debugging)
+        # Write HTML to file (for debugging)
         html_path = os.path.join(self.output_dir, "report.html")
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
         # Convert to PDF
         pdf_path = os.path.join(self.output_dir, "analysis_report.pdf")
-        HTML(string=html_content).write_pdf(pdf_path)
+        HTML(string=html_content, base_url=self.output_dir).write_pdf(pdf_path)
         return pdf_path
