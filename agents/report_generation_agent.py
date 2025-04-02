@@ -4,12 +4,14 @@ from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 import pandas as pd
 from datetime import datetime
+from models.llm_handler import LLMHandler
 
 class ReportGenerationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
         self.env = Environment(loader=FileSystemLoader('templates'))
+        self.llm = LLMHandler()  # Initialize LLM for insights
 
     def _select_preview_columns(self, data: pd.DataFrame, max_columns: int = 7):
         if len(data.columns) <= max_columns:
@@ -33,24 +35,65 @@ class ReportGenerationAgent:
     def generate_report(self, data: pd.DataFrame, eda_results: dict, insight: str, viz_paths: dict):
         preview_data = self._select_preview_columns(data, max_columns=7)
         data_head = preview_data.head().to_html(index=False, classes="table table-striped", border=0)
-        
+
         stats_table = eda_results['stats']['describe']
         if isinstance(stats_table, (pd.DataFrame, pd.Series)):
             stats_table = stats_table.to_string(float_format="%.6f")
-        elif not isinstance(stats_table, str):
-            stats_table = str(stats_table)
-        
         correlations = eda_results['correlations']
         if isinstance(correlations, (pd.DataFrame, pd.Series)):
             correlations = correlations.to_string(float_format="%.6f")
-        elif not isinstance(correlations, str):
-            correlations = str(correlations)
-        
         missing_values = "\n".join([f"{k}: {v}" for k, v in eda_results['stats']['missing_values'].items()])
         column_note = f"Showing {len(preview_data.columns)} of {len(data.columns)} columns; full data available in source file." if len(data.columns) > 7 else ""
-        
-        # Use relative paths for images
-        abs_viz_paths = {k: os.path.basename(v) if v else None for k, v in viz_paths.items()}
+
+        # Generate insight with HTML formatting
+        insight_prompt = (
+            "Provide key insights in HTML format (use <strong> for bold, <ul><li> for lists) based on this EDA:\n"
+            f"Statistics:\n{stats_table}\n"
+            f"Missing Values:\n{missing_values}\n"
+            f"Correlations:\n{correlations}\n"
+            "Include insights on temperature, correlations, coupon redemption, direction, and the target variable Y."
+        )
+        insight = self.llm.get_completion(insight_prompt, max_tokens=300)
+
+        # Prepare visualization data with descriptions
+        visualizations = []
+        for name, path in viz_paths.items():
+            if path:
+                prompt = (
+                    f"Describe this visualization in HTML format (use <strong> for bold, <ul><li> for lists): "
+                    f"{name.replace('_', ' ').title()} based on:\n"
+                    f"Statistics:\n{stats_table}\n"
+                    f"Correlations:\n{correlations}"
+                )
+                description = self.llm.get_completion(prompt, max_tokens=200)
+                visualizations.append({
+                    'name': name,
+                    'path': os.path.basename(path),
+                    'description': description
+                })
+
+        # Generate outcomes with HTML
+        outcomes_prompt = (
+            "Provide actionable outcomes in HTML format (use <strong> for bold, <ul><li> for lists) based on this EDA:\n"
+            f"Statistics:\n{stats_table}\n"
+            f"Missing Values:\n{missing_values}\n"
+            f"Correlations:\n{correlations}\n"
+            f"Insight:\n{insight}\n"
+            "Focus on temperature-based strategies, data cleaning, variable optimization, and customer behavior."
+        )
+        outcomes = self.llm.get_completion(outcomes_prompt, max_tokens=300)
+
+        # Generate conclusion with HTML
+        conclusion_prompt = (
+            "Provide a conclusion in HTML format (use <strong> for bold, <ul><li> for lists) based on this analysis:\n"
+            f"Statistics:\n{stats_table}\n"
+            f"Correlations:\n{correlations}\n"
+            f"Insight:\n{insight}\n"
+            f"Outcomes:\n{outcomes}\n"
+            "Include a summary, actionable recommendations, and next steps."
+        )
+        conclusion = self.llm.get_completion(conclusion_prompt, max_tokens=200)
+
         today_date = datetime.now().strftime("%B %d, %Y")
 
         template = self.env.get_template('report_template.html')
@@ -62,7 +105,9 @@ class ReportGenerationAgent:
             missing_values=missing_values,
             correlations=correlations,
             insight=insight,
-            viz_paths=abs_viz_paths,
+            outcomes=outcomes,
+            visualizations=visualizations,
+            conclusion=conclusion,
             today_date=today_date
         )
 

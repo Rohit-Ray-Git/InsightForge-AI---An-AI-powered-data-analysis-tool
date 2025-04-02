@@ -14,43 +14,41 @@
             background-color: #f5f6f5;
         }
         .cover-page {
-            height: 100vh;
+            height: 11in;
             background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
             color: white;
             text-align: center;
-            padding-top: 25vh;
+            padding-top: 4in;
             page-break-after: always;
-            position: relative;
         }
         .cover-page h1 {
-            font-size: 50px;
+            font-size: 48px;
             margin: 0;
             text-transform: uppercase;
-            letter-spacing: 2px;
         }
         .cover-page p {
             font-size: 18px;
             margin: 10px 0;
-            opacity: 0.9;
         }
         .cover-page .logo {
             position: absolute;
-            top: 20px;
-            left: 20px;
+            top: 0.5in;
+            left: 0.5in;
             font-size: 24px;
             font-weight: bold;
         }
         .container {
-            display: flex;
             margin: 0 0.5in;
         }
         .sidebar {
-            width: 200px;
+            float: left;
+            width: 180px;
             background-color: #2c3e50;
             color: white;
             padding: 20px;
-            min-height: 100vh;
-            font-size: 14px;
+            min-height: 8in;
+            font-size: 12px;
+            page-break-inside: avoid;
         }
         .sidebar h3 {
             color: #3498db;
@@ -64,16 +62,16 @@
             margin: 15px 0;
         }
         .content {
-            flex: 1;
-            padding: 20px 40px;
+            margin-left: 220px;
+            padding: 20px;
             background-color: white;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
         }
         h1 {
             color: #2c3e50;
             border-bottom: 4px solid #3498db;
             padding-bottom: 10px;
             font-size: 28px;
+            clear: both;
         }
         h2 {
             color: #34495e;
@@ -82,11 +80,16 @@
             border-radius: 5px;
             font-size: 20px;
         }
+        h3 {
+            color: #e74c3c;
+            font-size: 16px;
+            margin-top: 20px;
+            font-weight: bold;
+        }
         .table-striped {
             width: 100%;
             border-collapse: collapse;
             margin: 20px 0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
             font-size: 12px;
         }
         .table-striped th, .table-striped td {
@@ -95,16 +98,13 @@
             border-bottom: 1px solid #ddd;
             vertical-align: top;
             word-wrap: break-word;
+            max-width: 120px;
         }
         .table-striped th {
             background-color: #3498db;
             color: white;
             font-weight: bold;
             white-space: normal;
-        }
-        .table-striped td {
-            max-width: 150px; /* Prevent excessive width */
-            overflow-wrap: break-word;
         }
         .table-striped tr:nth-child(even) {
             background-color: #f9f9f9;
@@ -118,14 +118,13 @@
             word-wrap: break-word;
             border-left: 4px solid #3498db;
             page-break-inside: avoid;
+            max-width: 100%;
         }
         img {
             max-width: 100%;
             height: auto;
             margin: 20px 0;
             display: block;
-            border: 1px solid #ddd;
-            border-radius: 5px;
             page-break-inside: avoid;
         }
         .note {
@@ -134,17 +133,42 @@
             margin: 10px 0;
             font-size: 12px;
         }
-        .insight-box {
+        .insight-box, .conclusion-box {
             background-color: #fefefe;
             padding: 20px;
-            border-radius: 5px;
             border-left: 6px solid #e74c3c;
             margin: 20px 0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            page-break-inside: avoid;
+        }
+        .insight-box p, .conclusion-box p {
+            margin: 10px 0;
         }
         .section {
             margin-bottom: 40px;
             page-break-inside: avoid;
+        }
+        .eda-column {
+            width: 48%;
+            display: inline-block;
+            vertical-align: top;
+            margin-right: 2%;
+        }
+        .callout {
+            background-color: #ecf0f1;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        ul {
+            padding-left: 20px;
+            margin: 10px 0;
+        }
+        ul li {
+            margin: 5px 0;
+        }
+        strong {
+            font-weight: bold;
         }
         @page {
             size: A4;
@@ -163,23 +187,22 @@
     </style>
 </head>
 <body>
-    <!-- Cover Page -->
     <div class="cover-page">
         <div class="logo">InsightForge AI</div>
         <h1>InsightForge AI Analysis Report</h1>
         <p>Generated by InsightForge AI</p>
-        <p>April 02, 2025</p>
+        <p>April 03, 2025</p>
     </div>
 
-    <!-- Main Content with Sidebar -->
     <div class="container">
         <div class="sidebar">
             <h3>Contents</h3>
             <ul>
                 <li>Data Preview</li>
                 <li>Exploratory Data Analysis</li>
-                <li>AI-Generated Insight</li>
+                <li>Insights & Outcomes</li>
                 <li>Visualizations</li>
+                <li>Conclusion</li>
             </ul>
         </div>
         <div class="content">
@@ -252,8 +275,8 @@
 
             <div class="section">
                 <h1>Exploratory Data Analysis</h1>
-                <div style="display: flex; gap: 20px;">
-                    <div style="flex: 1;">
+                <div>
+                    <div class="eda-column">
                         <h2>Statistics</h2>
                         <pre>        temperature  has_children  toCoupon_GEQ5min  toCoupon_GEQ15min  toCoupon_GEQ25min  direction_same  direction_opp             Y     row_count
 count  12684.000000  12684.000000           12684.0       12684.000000       12684.000000    12684.000000   12684.000000  12684.000000  12684.000000
@@ -265,7 +288,7 @@ min       30.000000      0.000000               1.0           0.000000          
 75%       80.000000      1.000000               1.0           1.000000           0.000000        0.000000       1.000000      1.000000   9513.250000
 max       80.000000      1.000000               1.0           1.000000           1.000000        1.000000       1.000000      1.000000  12684.000000</pre>
                     </div>
-                    <div style="flex: 1;">
+                    <div class="eda-column">
                         <h2>Missing Values</h2>
                         <pre>destination: 0
 passanger: 0
@@ -310,33 +333,113 @@ row_count            -0.369747     -0.008885               NaN          -0.02614
             </div>
 
             <div class="section">
-                <h1>AI-Generated Insight</h1>
+                <h1>Insights & Outcomes</h1>
                 <div class="insight-box">
-                    <p>The provided exploratory data analysis summary offers insights into the distribution of variables and their correlations within a dataset. Key observations include:
+                    <h3>Key Insights</h3>
+                    <strong>Key Insights from Exploratory Data Analysis (EDA)</strong>
 
-1. **Temperature Distribution**: The average temperature is around 63.30, with a standard deviation of 19.15, indicating variability in temperature data.
-2. **Coupon and Directional Relationships**: Coupons that are valid for 5 minutes or more (`toCoupon_GEQ5min`) show no correlation with other variables due to missing values, but `toCoupon_GEQ15min` and `toCoupon_GEQ25min` have notable correlations with `direction_same` and `direction_opp`, suggesting a relationship between coupon validity and travel direction.
-3. **Demographic and Behavioral Insights**: The `has_children` variable has a low correlation with most variables, except a slight positive correlation with `toCoupon_GEQ15min`, indicating that having children might have a minor influence on coupon usage.
-4. **Target Variable (Y)**: The target variable `Y` has a weak positive correlation with `temperature` and a very weak correlation with other variables, suggesting that temperature might have a slight influence on the target outcome, but other factors have minimal direct impact.
-5. **Row Count**: The `row_count` variable has a strong negative correlation with `temperature`, indicating that higher temperatures might be associated with fewer data points or observations.
+The EDA provides a comprehensive overview of the dataset, revealing interesting patterns and relationships between variables. The key insights can be summarized as follows:
 
-Overall, the analysis suggests that temperature, coupon validity, and travel direction have some level of interrelation, while demographic factors like having children have minimal influence on the target variable. The absence of correlations for `toCoupon_GEQ5min` is notable and may warrant further investigation due to missing values.</p>
+### Temperature
+- The average temperature is <strong>63.30</strong> with a standard deviation of <strong>19.15</strong>, indicating a wide range of temperatures in the dataset.
+- Temperature ranges from <strong>30</strong> to <strong>80</strong>, with the 50th and 75th percentiles both being <strong>80</strong>, suggesting that most data points are concentrated at the higher end of the temperature spectrum.
+
+### Correlations
+- <strong>Temperature</strong> is negatively correlated with <strong>toCoupon_GEQ15min</strong> and <strong>toCoupon_GEQ25min</strong>, indicating that higher temperatures might be associated with lower redemption rates for coupons that are at least 15 or 25 minutes away from expiration.
+- <strong>Direction_same</strong> and <strong>direction_opp</strong> are perfectly negatively correlated, as expected, since they represent opposite directions.
+- The target variable <strong>Y</strong> has a weak positive correlation with <strong>temperature</strong> and <strong>direction_same</strong>, suggesting a potential, albeit weak, relationship between these variables and the outcome.
+
+### Coupon Redemption
+- The mean values for <strong>
+                    <h3>Actionable Outcomes</h3>
+                    <strong>Actionable Outcomes from Exploratory Data Analysis (EDA)</strong>
+
+Based on the insights gained from the EDA, the following actionable outcomes can be derived:
+
+### Temperature-Based Strategies
+<ul>
+<li>Develop targeted marketing campaigns for temperature ranges between <strong>30</strong> and <strong>80</strong> to capitalize on the wide range of temperatures in the dataset.</li>
+<li>Focus on optimizing coupon redemption rates for temperatures above <strong>63.30</strong>, the average temperature, to leverage the positive correlation between temperature and coupon redemption.</li>
+</ul>
+
+### Data Cleaning and Variable Optimization
+<ul>
+<li>Impute missing values for the <strong>car</strong> variable, which has <strong>12576</strong> missing values, to improve the accuracy of models and analysis.</li>
+<li>Investigate and address the <strong>107</strong>, <strong>217</strong>, <strong>151</strong>, <strong>130</strong>, and <strong>189</strong> missing values in the <strong>Bar</strong>, <strong>CoffeeHouse</strong>, <strong>CarryAway</strong>, <strong>RestaurantLessThan20</strong>, and <strong>Restaurant20To50</strong> variables, respectively.</li>
+<li>Consider removing or transforming variables with high correlations, such as <strong>direction_same</strong> and <strong>direction_opp</strong>, to
                 </div>
             </div>
 
             <div class="section">
                 <h1>Visualizations</h1>
                 
-                    
-                        <h2>Temperature Vs Has Children Scatter</h2>
-                        <img src="temperature_vs_has_children_scatter.png" alt="temperature_vs_has_children_scatter">
-                    
+                    <h2>Temperature Vs Has Children Scatter</h2>
+                    <img src="temperature_vs_has_children_scatter.png" alt="temperature_vs_has_children_scatter">
+                    <div class="callout">
+                        The provided statistics and correlations describe a dataset used to create a **Temperature Vs Has Children Scatter** visualization. Here are the key statistics and correlations:
+
+**Statistics:**
+The dataset consists of 12,684 rows, with the following statistics:
+<ul>
+  <li><strong>Temperature:</strong> The temperature ranges from 30 to 80, with a mean of 63.30 and a standard deviation of 19.15.</li>
+  <li><strong>Has Children:</strong> The 'has_children' column is a binary variable, with 41.41% of the values being 1 (indicating 'yes') and 58.59% being 0 (indicating 'no').</li>
+  <li><strong>Other columns:</strong> The dataset also includes other columns such as toCoupon_GEQ5min, toCoupon_GEQ15min, toCoupon_GEQ25min, direction_same, direction_opp, Y, and row_count
+                    </div>
                 
-                    
-                        <h2>Tocoupon Geq15Min Distribution</h2>
-                        <img src="toCoupon_GEQ15min_distribution.png" alt="toCoupon_GEQ15min_distribution">
-                    
+                    <h2>Temperature Box</h2>
+                    <img src="temperature_box.png" alt="temperature_box">
+                    <div class="callout">
+                        The provided statistics and correlations can be summarized in the following visualization:
+This is a Temperature Box based on the given statistics and correlations. 
+The main features of the visualization are:
+- <strong>Temperature Distribution</strong>: The temperature ranges from <strong>30</strong> to <strong>80</strong> with a mean of <strong>63.30</strong> and a standard deviation of <strong>19.15</strong>.
+- <strong>Key Statistics</strong>:
+  <ul>
+    <li>Count: 12684</li>
+    <li>Mean: 63.30</li>
+    <li>Standard Deviation: 19.15</li>
+    <li>Minimum: 30</li>
+    <li>25th Percentile: 55</li>
+    <li>50th Percentile (Median): 80</li>
+    <li>75th Percentile: 80</li>
+                    </div>
                 
+                    <h2>Correlation Heatmap</h2>
+                    <img src="correlation_heatmap.png" alt="correlation_heatmap">
+                    <div class="callout">
+                        The provided data is a correlation heatmap based on various statistics. The main features of this data can be summarized as follows:
+
+* **Summary Statistics**: The data includes summary statistics such as count, mean, standard deviation, minimum, 25th percentile, median (50th percentile), 75th percentile, and maximum for the following variables:
+  <ul>
+    <li>temperature</li>
+    <li>has_children</li>
+    <li>toCoupon_GEQ5min</li>
+    <li>toCoupon_GEQ15min</li>
+    <li>toCoupon_GEQ25min</li>
+    <li>direction_same</li>
+    <li>direction_opp</li>
+    <li>Y</li>
+    <li>row_count</li>
+  </ul>
+
+* **Correlations**: The data includes a correlation matrix that shows the correlation between each pair of variables. The correlation coefficients range from -1 (perfect negative correlation
+                    </div>
+                
+            </div>
+
+            <div class="section">
+                <h1>Conclusion</h1>
+                <div class="conclusion-box">
+                    <strong>Conclusion</strong>
+
+The exploratory data analysis (EDA) has provided a comprehensive overview of the dataset, revealing interesting patterns and relationships between variables. The key insights can be summarized as follows:
+
+### Key Findings
+<ul>
+<li>The average temperature is <strong>63.30</strong> with a standard deviation of <strong>19.15</strong>, indicating a wide range of temperatures in the dataset.</li>
+<li>Temperature ranges from <strong>30</strong> to <strong>80</strong>, with the 50th and 75th percentiles both being <strong>80</strong>, suggesting that most data points are concentrated at the higher end of the temperature spectrum.</li>
+<li><strong>Temperature</strong> is negatively correlated with <strong>toCoupon_GEQ15min</strong> and <strong>toCoupon_GEQ25min</strong>, indicating that higher temperatures might be associated with lower redemption rates for coupons that are at least
+                </div>
             </div>
         </div>
     </div>
