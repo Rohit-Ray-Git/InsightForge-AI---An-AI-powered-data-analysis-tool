@@ -49,9 +49,7 @@ if uploaded_file is not None:
 st.markdown(
     """
     **Note**: You can ask questions about fetching data from the ‘insightforge_db’ database or about the uploaded data.  
-    Examples:  
-    - "What tables are in the database?"  
-    - "How many sales in North region?"  
+    Examples: 
     - "Show me a scatter plot of price vs income."  
     - "What are the trends in the housing market?"
     """
@@ -111,13 +109,36 @@ if prompt:
             plan = plan_match.group(1).strip()
             
             if category == "Database query":
-                # Database queries don't require an uploaded file
-                sql_query_match = re.search(r"SQL Query:\s*(.*?)(?:\n|$)", plan)
-                if sql_query_match:
-                    sql_query = sql_query_match.group(1).strip()
-                    response = db_agent.query(sql_query)
+                # Handle specific database queries in a user-friendly way
+                prompt_lower = prompt.lower()
+                if "database" in prompt_lower and ("which" in prompt_lower or "what" in prompt_lower) and "using" in prompt_lower:
+                    # For "Which database you are using?"
+                    response = "I am using a database called 'insightforge_db'."
+                elif "tables" in prompt_lower and "database" in prompt_lower and "how many" in prompt_lower:
+                    # For "How many tables?" - Count the tables
+                    sql_query_match = re.search(r"SQL Query:\s*(.*?)(?:\n|$)", plan)
+                    if sql_query_match:
+                        sql_query = sql_query_match.group(1).strip()
+                        result = db_agent.query(sql_query)
+                        # Extract the count from the result (e.g., [(2,)])
+                        try:
+                            count = int(result.strip("[]()").split(",")[0])
+                            response = f"There are {count} tables in the database."
+                        except (ValueError, IndexError):
+                            response = "I couldn't determine the number of tables. Let's try listing them instead: " + db_agent.fetch_all_tables()
+                    else:
+                        response = "I understood you want to know how many tables are in the database, but I couldn't generate a valid SQL query. Let's try listing them instead: " + db_agent.fetch_all_tables()
+                elif "tables" in prompt_lower and "database" in prompt_lower:
+                    # For "What tables are in the database?" or "Name the tables"
+                    response = db_agent.fetch_all_tables()
                 else:
-                    response = "I understood you want a database query, but I couldn't generate a valid SQL query. Please rephrase your question."
+                    # For other database queries
+                    sql_query_match = re.search(r"SQL Query:\s*(.*?)(?:\n|$)", plan)
+                    if sql_query_match:
+                        sql_query = sql_query_match.group(1).strip()
+                        response = db_agent.query(sql_query)
+                    else:
+                        response = "I understood you want a database query, but I couldn't generate a valid SQL query. Please rephrase your question."
             
             elif category == "Visualization request":
                 # Visualization requests require an uploaded file
