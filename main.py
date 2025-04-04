@@ -1,107 +1,178 @@
 # main.py
-import os
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import streamlit as st
 import pandas as pd
-from agents.report_generation_agent import ReportGenerationAgent
-from models.llm_handler import LLMHandler  # Adjust based on your setup
+import os
+import re
+from agents.database_agent import DatabaseAgent
+from agents.web_scraping_agent import WebScrapingAgent
+from agents.visualization_agent import VisualizationAgent
+from agents.content_generation_agent import ContentGenerationAgent
 
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'data/uploads'
-app.config['REPORT_FOLDER'] = 'data/reports'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['REPORT_FOLDER'], exist_ok=True)
+# Set page config
+st.set_page_config(page_title="InsightForge AI", layout="wide")
 
-llm = LLMHandler()
-report_agent = ReportGenerationAgent()
-data = None  # Global variable to store uploaded data
+# Initialize session state
+if 'data' not in st.session_state:
+    st.session_state.data = None
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
 
-@app.route('/')
-def index():
-    return render_template('chat.html')
+# Initialize agents
+db_agent = DatabaseAgent()
+web_agent = WebScrapingAgent()
+viz_agent = VisualizationAgent(output_dir="data/reports")
+content_agent = ContentGenerationAgent()
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    if 'file' not in request.files or not request.files['file'].filename:
-        return jsonify({'message': 'No file uploaded or selected'}), 400
+# Create directories
+os.makedirs("data/uploads", exist_ok=True)
+os.makedirs("data/reports", exist_ok=True)
 
-    file = request.files['file']
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-    file.save(filepath)
+# Title and description
+st.title("InsightForge AI")
+st.markdown("Unlock insights from your data with AI")
 
-    global data
+# File upload section
+st.subheader("Upload Your Data")
+uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+if uploaded_file is not None:
+    st.session_state.data = pd.read_csv(uploaded_file)
+    st.success(f"File '{uploaded_file.name}' uploaded successfully.")
+    # Save the uploaded file
+    upload_path = os.path.join("data/uploads", uploaded_file.name)
+    with open(upload_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    # Display the first few rows
+    st.subheader("Data Preview")
+    st.dataframe(st.session_state.data.head())
+
+# Note about database and data queries
+st.markdown(
+    """
+    **Note**: You can ask questions about fetching data from the ‘insightforge_db’ database or about the uploaded data.  
+    Examples:  
+    - "What tables are in the database?"  
+    - "How many sales in North region?"  
+    - "Show me a scatter plot of price vs income."  
+    - "What are the trends in the housing market?"
+    """
+)
+
+# Chat interface
+st.subheader("Ask a Question")
+prompt = st.chat_input("Type your question here...")
+
+if prompt:
+    # Add user message to chat history
+    st.session_state.chat_history.append({"role": "user", "content": prompt})
+    
+    # Process the prompt
+    response = ""
+    image_path = None
+    
     try:
-        if filepath.endswith('.csv'):
-            data = pd.read_csv(filepath)
-        elif filepath.endswith('.xlsx'):
-            data = pd.read_excel(filepath)
-        else:
-            return jsonify({'message': 'Unsupported file format (use CSV or XLSX)'}), 400
-    except Exception as e:
-        return jsonify({'message': f'Error reading file: {str(e)}'}), 500
-
-    return jsonify({'message': f'File "{file.filename}" uploaded successfully. Ask me about it or generate a report!'})
-
-@app.route('/chat', methods=['POST'])
-def chat():
-    if data is None:
-        return jsonify({'response': 'Please upload a data file first.'})
-
-    message = request.json.get('message', '').strip()
-    if not message:
-        return jsonify({'response': 'Please enter a question.'})
-
-    prompt = f"Analyze this data:\n{data.head().to_string()}\n\nUser question: {message}"
-    try:
-        response = llm.get_completion(prompt, max_tokens=1000)
-        return jsonify({'response': response})
-    except Exception as e:
-        return jsonify({'response': f'Error processing question: {str(e)}'}), 500
-
-@app.route('/generate_report', methods=['POST'])
-def generate_report():
-    if data is None:
-        return jsonify({'response': 'Please upload a data file first.'})
-
-    try:
-        numeric_data = data.select_dtypes(include=['float64', 'int64'])
-        eda_results = {
-            'stats': {
-                'describe': data.describe(),
-                'missing_values': data.isnull().sum().to_dict()
-            },
-            'correlations': numeric_data.corr() if not numeric_data.empty else "No numeric columns available"
-        }
-        viz_paths = {  # Placeholder; replace with actual visualization logic if available
-            'temperature_vs_has_children_scatter': 'temperature_vs_has_children_scatter.png',
-            'temperature_distribution': 'temperature_distribution.png',
-            'correlation_heatmap': 'correlation_heatmap.png'
-        }
-        insight = "Initial insight placeholder"  # Overridden by LLM in report_agent
-        
-        report_paths = report_agent.generate_report(data, eda_results, insight, viz_paths)
-        
-        # Handle dict or string return from report_agent
-        html_filename = os.path.basename(report_paths.get('html_path', 'report.html') if isinstance(report_paths, dict) else 'report.html')
-        pdf_filename = os.path.basename(report_paths.get('pdf_path', 'analysis_report.pdf') if isinstance(report_paths, dict) else report_paths)
-        
-        response = (
-            f"Report generated successfully! "
-            f"<a href='/reports/{html_filename}' class='view-link' target='_blank'>View HTML Report</a> | "
-            f"<a href='/download/{pdf_filename}' class='download-link' target='_blank'>Download PDF Report</a>"
+        # Use ContentGenerationAgent to classify the prompt and generate a plan
+        schema_info = db_agent.db.get_table_info()
+        columns = st.session_state.data.columns.tolist() if st.session_state.data is not None else []
+        prompt_analysis = content_agent.generate(
+            f"""
+            Analyze the following user prompt: '{prompt}'.
+            The user has access to a MySQL database named 'insightforge_db' with the following schema:
+            {schema_info}
+            The user has also uploaded a CSV file with the following columns (if any): {columns}.
+            
+            Determine the user's intent and classify the prompt into one of the following categories:
+            1. Database query (e.g., asking about tables, data in the database)
+            2. Visualization request (e.g., asking for a plot, graph, or chart)
+            3. Web research (e.g., asking about trends, market analysis)
+            
+            Then, provide a plan to fulfill the request:
+            - For database queries: Suggest an SQL query to execute using the format: SQL Query: [your query]
+            - For visualization requests: Specify the type of plot (scatter, histogram, heatmap) and the columns to use (if mentioned) using the format: Plot Type: [type]\nX Column: [x_col]\nY Column: [y_col]\nHistogram Column: [hist_col]
+            - For web research: Extract the topic to research using the format: Topic: [topic]
+            
+            Return your response in the following format:
+            Category: [category]
+            Plan: [your plan]
+            """
         )
-        return jsonify({'response': response})
+        
+        # Debug: Print the prompt analysis to understand what the LLM is returning
+        print(f"Prompt Analysis:\n{prompt_analysis}")
+        
+        # Parse the LLM's response with more robust regular expressions
+        category_match = re.search(r"Category:\s*(.+?)(?:\n|$)", prompt_analysis)
+        plan_match = re.search(r"Plan:\s*(.+)", prompt_analysis, re.DOTALL)
+        
+        if not category_match or not plan_match:
+            response = f"I couldn't understand your request. Could you please rephrase it?\n\nDebug Info:\n{prompt_analysis}"
+        else:
+            # Remove any numbering (e.g., "1. ") from the category
+            category = re.sub(r"^\d+\.\s*", "", category_match.group(1).strip())
+            plan = plan_match.group(1).strip()
+            
+            if category == "Database query":
+                # Database queries don't require an uploaded file
+                sql_query_match = re.search(r"SQL Query:\s*(.*?)(?:\n|$)", plan)
+                if sql_query_match:
+                    sql_query = sql_query_match.group(1).strip()
+                    response = db_agent.query(sql_query)
+                else:
+                    response = "I understood you want a database query, but I couldn't generate a valid SQL query. Please rephrase your question."
+            
+            elif category == "Visualization request":
+                # Visualization requests require an uploaded file
+                if st.session_state.data is None:
+                    response = "Please upload a data file first to proceed with visualization requests."
+                else:
+                    plot_type_match = re.search(r"Plot Type:\s*(.*?)(?:\n|$)", plan)
+                    x_col_match = re.search(r"X Column:\s*(.*?)(?:\n|$)", plan)
+                    y_col_match = re.search(r"Y Column:\s*(.*?)(?:\n|$)", plan)
+                    hist_col_match = re.search(r"Histogram Column:\s*(.*?)(?:\n|$)", plan)
+                    
+                    plot_type = plot_type_match.group(1).strip() if plot_type_match else None
+                    x_col = x_col_match.group(1).strip() if x_col_match else None
+                    y_col = y_col_match.group(1).strip() if y_col_match else None
+                    hist_col = hist_col_match.group(1).strip() if hist_col_match else None
+                    
+                    if plot_type:
+                        if "scatter" in plot_type.lower():
+                            image_path = viz_agent.generate_scatter(st.session_state.data, x_col=x_col, y_col=y_col)
+                            response = f"Here is the scatter plot{' of ' + x_col + ' vs ' + y_col if x_col and y_col else ''}:"
+                        elif "histogram" in plot_type.lower() or "distribution" in plot_type.lower():
+                            image_path = viz_agent.generate_distribution(st.session_state.data, hist_col=hist_col)
+                            response = f"Here is the distribution plot{' of ' + hist_col if hist_col else ''}:"
+                        elif "heatmap" in plot_type.lower():
+                            image_path = viz_agent.generate_correlation_heatmap(st.session_state.data)
+                            response = "Here is the correlation heatmap of the features:"
+                        else:
+                            response = "I understood you want a visualization, but I couldn't determine the plot type. Please specify (e.g., 'scatter', 'histogram', 'heatmap')."
+                    else:
+                        response = "I understood you want a visualization, but I couldn't determine the plot type. Please specify (e.g., 'scatter', 'histogram', 'heatmap')."
+            
+            elif category == "Web research":
+                # Web research doesn't require an uploaded file
+                topic_match = re.search(r"Topic:\s*(.*?)(?:\n|$)", plan)
+                if topic_match:
+                    topic = topic_match.group(1).strip()
+                    response = web_agent.research(topic)
+                else:
+                    response = "I understood you want to research a topic, but I couldn't determine the topic. Please rephrase your question."
+            
+            else:
+                response = "I couldn't categorize your request. Please try rephrasing it."
+    
     except Exception as e:
-        return jsonify({'response': f'Error generating report: {str(e)}'}), 500
+        response = f"Error processing your request: {str(e)}"
+    
+    # Add assistant response to chat history
+    st.session_state.chat_history.append({"role": "assistant", "content": response, "image": image_path})
 
-@app.route('/reports/<filename>', methods=['GET'])
-def view_report(filename):
-    """Serve HTML files for viewing in the browser."""
-    return send_from_directory(app.config['REPORT_FOLDER'], filename, mimetype='text/html')
-
-@app.route('/download/<filename>', methods=['GET'])
-def download_file(filename):
-    """Serve files (e.g., PDF) as downloads."""
-    return send_from_directory(app.config['REPORT_FOLDER'], filename, as_attachment=True)
-
-if __name__ == '__main__':
-    app.run(debug=True)
+# Display chat history
+for message in st.session_state.chat_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if message.get("image"):
+            if not message["image"].startswith("No"):
+                st.image(message["image"], caption=message["content"], use_column_width=True)
+            else:
+                st.markdown(message["image"])
