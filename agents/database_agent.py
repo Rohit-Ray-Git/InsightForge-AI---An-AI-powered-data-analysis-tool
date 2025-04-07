@@ -1,5 +1,5 @@
 import os
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
 from dotenv import load_dotenv
 import pymysql
@@ -27,7 +27,11 @@ class DatabaseAgent:
         except Exception as e:
             raise ConnectionError(f"Failed to connect to MySQL: {str(e)}")
 
-        self.llm = ChatGroq(model="llama3-70b-8192", api_key=os.getenv("GROQ_API_KEY"))
+        # Initialize Gemini model with Google API key
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",  # Use the appropriate Gemini model (e.g., "gemini-pro" or "gemini-1.5-pro" depending on availability)
+            api_key=os.getenv("GOOGLE_API_KEY")
+        )
 
     def query(self, question: str) -> str:
         """
@@ -47,7 +51,7 @@ class DatabaseAgent:
             
             # Use the detailed schema for better query generation
             schema_info = self.get_detailed_table_info()
-            print(f"Debug (DatabaseAgent): Schema info = {schema_info}")  # Added debugging
+            print(f"Debug (DatabaseAgent): Schema info = {schema_info}")
             prompt = (
                 f"Given this database schema:\n{schema_info}\n"
                 f"Generate an SQL query to answer this question: {question}\n"
@@ -56,7 +60,7 @@ class DatabaseAgent:
                 "Return only the SQL query, without any additional text or explanation."
             )
             sql_query = self.llm.invoke(prompt).content.strip()
-            print(f"Debug (DatabaseAgent): Generated SQL query = {sql_query}")  # Added debugging
+            print(f"Debug (DatabaseAgent): Generated SQL query = {sql_query}")
             
             # Execute the generated SQL query
             result = self.db.run(sql_query)
@@ -86,7 +90,7 @@ class DatabaseAgent:
                     columns[col_name] = {"type": col_type.upper()}  # Convert to uppercase for consistency
                 if columns:
                     schema[table_name] = {"columns": columns}
-            print(f"Debug (DatabaseAgent): Detailed schema = {schema}")  # Added debugging
+            print(f"Debug (DatabaseAgent): Detailed schema = {schema}")
             return schema
         except Exception as e:
             print(f"Debug (DatabaseAgent): Error fetching detailed table info: {e}")
