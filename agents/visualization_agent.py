@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 from crewai import Agent
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 class VisualizationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
         self.agent = Agent(
             role="Data Visualizer",
             goal="Generate insightful visualizations from data",

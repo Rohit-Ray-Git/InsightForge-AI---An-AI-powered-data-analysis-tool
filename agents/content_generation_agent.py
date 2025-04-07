@@ -1,5 +1,5 @@
 # agents/content_generation_agent.py
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 import os
 
@@ -7,7 +7,7 @@ load_dotenv()
 
 class ContentGenerationAgent:
     def __init__(self):
-        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
 
     def generate(self, prompt: str) -> str:
         """

@@ -3,14 +3,14 @@
 import os
 import litellm
 from crewai import Agent, Task, Crew
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from agents.content_generation_agent import ContentGenerationAgent
 
 class ReportGenerationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
-        self.llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
         self.content_agent = ContentGenerationAgent()
         self.agent = Agent(
             role="Report Writer",
@@ -41,4 +41,3 @@ class ReportGenerationAgent:
 
         result = crew.kickoff()
         return result
-

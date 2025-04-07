@@ -2,7 +2,7 @@
 import os
 from crewai import Agent
 from crewai.tools import BaseTool
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from typing import Optional
 
@@ -30,7 +30,7 @@ class StorageAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        self.llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
         
         # Instantiate the custom tool
         save_tool = SaveFileTool(output_dir=self.output_dir)

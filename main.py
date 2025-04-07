@@ -6,10 +6,14 @@ from decimal import Decimal
 import ast
 import numpy as np
 import json
+import logging
 from agents.database_agent import DatabaseAgent
 from agents.web_scraping_agent import WebScrapingAgent
 from agents.visualization_agent import VisualizationAgent
 from agents.content_generation_agent import ContentGenerationAgent
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Set page config
 st.set_page_config(page_title="InsightForge AI - Advanced Data Analysis Tool", layout="wide")
@@ -19,6 +23,10 @@ if 'data' not in st.session_state:
     st.session_state.data = None
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = None
+if 'selected_table' not in st.session_state:
+    st.session_state.selected_table = None
 
 # Initialize agents
 db_agent = DatabaseAgent()
@@ -34,37 +42,6 @@ os.makedirs("data/reports", exist_ok=True)
 st.title("InsightForge AI - Advanced Data Analysis Tool")
 st.markdown("Unlock deep insights from your data with comprehensive statistical analysis and visualizations.")
 
-# File upload section
-st.subheader("Upload Your Data")
-uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
-if uploaded_file is not None:
-    st.session_state.data = pd.read_csv(uploaded_file)
-    st.success(f"File '{uploaded_file.name}' uploaded successfully.")
-    # Save the uploaded file
-    upload_path = os.path.join("data/uploads", uploaded_file.name)
-    with open(upload_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    # Display the first few rows
-    st.subheader("Data Preview")
-    st.dataframe(st.session_state.data.head())
-
-# Note about database and data queries
-st.markdown(
-    """
-    **Note**: You can ask questions about fetching data from the ‘insightforge_db’ database or uploaded data.  
-    Examples:  
-    - "What tables are in the database?"  
-    - "How many tables?"  
-    - "Give me a detailed analysis of layoffs table with column salary"  
-    - "Show me a histogram of layoffs table with column salary"  
-    - "Show me a scatter plot of price vs income from uploaded data"
-    """
-)
-
-# Chat interface
-st.subheader("Ask a Question")
-prompt = st.chat_input("Type your question here...")
-
 def compute_statistics(table_name, schema_info):
     """Compute statistical summary for numeric columns in the table."""
     # Parse schema_info if it's a string
@@ -72,7 +49,7 @@ def compute_statistics(table_name, schema_info):
         try:
             schema_info = json.loads(schema_info) if schema_info.strip().startswith('{') else ast.literal_eval(schema_info)
         except (json.JSONDecodeError, ValueError, SyntaxError):
-            print(f"Debug: Failed to parse schema_info as dictionary: {schema_info}")
+            logging.error(f"Failed to parse schema_info as dictionary: {schema_info}")
             return None
     
     numeric_cols = [col for col in schema_info.get(table_name, {}).get("columns", {}) 
@@ -81,7 +58,8 @@ def compute_statistics(table_name, schema_info):
         return None
     
     stats = {}
-    query = f"SELECT {', '.join(numeric_cols)} FROM {table_name} LIMIT 1000"  # Limit to 1000 rows for performance
+    # Enclose table name in backticks
+    query = f"SELECT {', '.join(numeric_cols)} FROM `{table_name}` LIMIT 1000"  # Limit to 1000 rows for performance
     result = db_agent.query(query)
     try:
         data = ast.literal_eval(result) if isinstance(result, str) else result
@@ -101,7 +79,7 @@ def compute_statistics(table_name, schema_info):
                         "q3": float(col_data.quantile(0.75)) if isinstance(col_data.quantile(0.75), Decimal) else col_data.quantile(0.75)
                     }
     except Exception as e:
-        print(f"Debug: Error computing statistics: {e}")
+        logging.error(f"Error computing statistics: {e}")
         return None
     return stats
 
@@ -111,21 +89,15 @@ def format_database_response(raw_result, question, schema_info):
         return raw_result
     
     try:
-        # Debug: Print the raw result and schema_info to inspect their format
-        print(f"Debug: Raw result = {raw_result}")
-        print(f"Debug: Schema info = {schema_info}")
-        
         # Attempt to parse the raw result safely
         try:
             cleaned_result = ast.literal_eval(raw_result) if isinstance(raw_result, str) else raw_result
         except (ValueError, SyntaxError) as e:
-            print(f"Debug: ast.literal_eval failed with error: {e}")
+            logging.error(f"ast.literal_eval failed with error: {e}")
             try:
                 cleaned_result = eval(raw_result)
             except Exception as eval_e:
                 return f"Sorry, I couldn’t understand the result: {str(eval_e)}. Please try rephrasing your question or check the table schema."
-
-        print(f"Debug: Cleaned result = {cleaned_result}")
         
         if isinstance(cleaned_result, list):
             if len(cleaned_result) == 0:
@@ -154,16 +126,17 @@ def format_database_response(raw_result, question, schema_info):
 
                     # Extract table name
                     table_name = None
-                    table_match = re.search(r"(?:insight about|insight of|detailed analysis of)\s+([a-zA-Z_]+)\s+table", question.lower())
+                    table_match = re.search(r"(?:insight about|insight of|detailed analysis of)\s+([a-zA-Z_]+(?:\s+[a-zA-Z_]+)*)\s+table", question.lower())
                     if table_match:
                         table_name = table_match.group(1)
                     else:
-                        table_match = re.search(r"FROM\s+([a-zA-Z_]+)", question, re.IGNORECASE)
+                        table_match = re.search(r"FROM\s+([a-zA-Z_]+(?:\s+[a-zA-Z_]+)*)", question, re.IGNORECASE)
                         table_name = table_match.group(1) if table_match else None
 
                     sample_text = "no sample data available"
                     if table_name:
-                        sample_query = f"SELECT * FROM {table_name} LIMIT 5"
+                        # Enclose table name in backticks
+                        sample_query = f"SELECT * FROM `{table_name}` LIMIT 5"
                         sample_result = db_agent.query(sample_query)
                         try:
                             sample_data = ast.literal_eval(sample_result) if isinstance(sample_result, str) else sample_result
@@ -190,7 +163,7 @@ def format_database_response(raw_result, question, schema_info):
                     insight_prompt = (
                         f"Based on the following statistics about the '{table_name}' table: 'This table has about {total_rows} entries. "
                         f"The average value of a key numeric column is around {avg_value}. Detailed statistics: {stats_text}.' "
-                        f"And a sample of the data: '{sample_text}', provide a detailed paragraph (4-5 sentences) of insights in layman's terms. "
+                        f"And a sample of the data: '{sample_text}', provide a detailed paragraph (1-2 sentences) of insights in layman's terms. "
                         f"Include observations about trends, typical values, variability, and potential business implications or uses, without reproducing the raw data."
                     )
                     insight_response = content_agent.generate(insight_prompt)
@@ -214,171 +187,231 @@ def format_database_response(raw_result, question, schema_info):
     except Exception as e:
         return f"Sorry, I couldn’t understand the result: {str(e)}. Please try rephrasing your question or check the table schema."
 
-if prompt:
-    # Add user message to chat history
-    st.session_state.chat_history.append({"role": "user", "content": prompt})
-    
-    # Process the prompt
-    response = ""
-    image_path = None
-    
-    try:
-        # Use ContentGenerationAgent to classify the prompt and generate a plan
+# Data Source Selection
+if st.session_state.data_source is None:
+    st.subheader("Select Data Source")
+    data_source = st.radio("Choose your data source:", ["Database", "Upload File"])
+    if st.button("Confirm Data Source"):
+        st.session_state.data_source = data_source
+        st.rerun()
+
+# Database Flow
+elif st.session_state.data_source == "Database":
+    if st.session_state.selected_table is None:
+        st.subheader("Select a Table from the Database")
+        try:
+            tables_result = db_agent.query("SHOW TABLES")
+            # Correctly extract table names from the list of tuples
+            tables = [table[0] for table in ast.literal_eval(tables_result)]
+            selected_table = st.selectbox("Available Tables:", tables)
+            if st.button("Analyze Table"):
+                st.session_state.selected_table = selected_table
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error fetching tables: {e}")
+    else:
+        st.subheader(f"Analyzing Table: {st.session_state.selected_table}")
+        # Display initial insight
         schema_info = db_agent.db.get_table_info()
-        # Debug: Check and parse schema_info
-        print(f"Debug: Raw schema_info = {schema_info}")
-        if isinstance(schema_info, str):
-            try:
-                schema_info = json.loads(schema_info) if schema_info.strip().startswith('{') else ast.literal_eval(schema_info)
-                print(f"Debug: Parsed schema_info = {schema_info}")
-            except (json.JSONDecodeError, ValueError, SyntaxError) as e:
-                print(f"Debug: Failed to parse schema_info: {e}")
-                schema_info = {}
-        
-        columns = st.session_state.data.columns.tolist() if st.session_state.data is not None else []
-        prompt_analysis = content_agent.generate(
-            f"""
-            Analyze the following user prompt: '{prompt}'.
-            The user has access to a MySQL database named 'insightforge_db' with the following schema:
-            {schema_info}
-            The user has also uploaded a CSV file with the following columns (if any): {columns}.
-            
-            Determine the user's intent and classify the prompt into one of the following categories:
-            1. Database query (e.g., asking about tables, data in the database, or database metadata like its name)
-            2. Visualization request (e.g., asking for a plot, graph, or chart)
-            3. Web research (e.g., asking about trends, market analysis)
-            
-            Then, provide a plan to fulfill the request:
-            - For database queries: If asking about the database name, return: Database Name: insightforge_db
-              If asking about tables, return: SQL Query: SHOW TABLES
-              If asking how many tables, return: SQL Query: SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'insightforge_db'
-              If asking for a detailed analysis of a table (e.g., 'give me an insight about' or 'detailed analysis of'), return a list of available columns with their types from the schema and prompt the user to specify a numeric column, or if a numeric column is detected, return: SQL Query: SELECT COUNT(*) as total_rows, AVG([numeric_column]) as average_value FROM [table_name] WHERE [numeric_column] IS NOT NULL
-              For other data queries, return: SQL Query: [your query]
-            - For visualization requests: Specify the type of plot (scatter, histogram, heatmap, boxplot) and the columns to use (if mentioned) using the format: Plot Type: [type]\nX Column: [x_col]\nY Column: [y_col]\nHistogram Column: [hist_col]\nBoxplot Column: [box_col]\nTable Name: [table_name]
-            - For web research: Extract the topic to research using the format: Topic: [topic]
-            
-            Return your response in the following format:
-            Category: [category]
-            Plan: [your plan]
-            """
-        )
-        
-        # Debug: Print the prompt analysis to understand what the LLM is returning
-        print(f"Debug: Prompt Analysis = {prompt_analysis}")
-        
-        # Parse the LLM's response with more robust regular expressions
-        category_match = re.search(r"Category:\s*(.+?)(?:\n|$)", prompt_analysis)
-        plan_match = re.search(r"Plan:\s*(.+)", prompt_analysis, re.DOTALL)
-        
-        if not category_match or not plan_match:
-            response = f"I couldn't understand your request. Could you please rephrase it?\n\nDebug Info:\n{prompt_analysis}"
-        else:
-            category = re.sub(r"^\d+\.\s*", "", category_match.group(1).strip())
-            plan = plan_match.group(1).strip()
-            
-            # Extract table_name from plan if available
-            table_name = None
-            table_match = re.search(r"Table Name:\s*([a-zA-Z_]+)", plan, re.IGNORECASE)
-            if table_match:
-                table_name = table_match.group(1)
-            else:
-                # Fallback to extract from question
-                table_match = re.search(r"(?:insight about|insight of|detailed analysis of)\s+([a-zA-Z_]+)\s+table", prompt.lower())
-                table_name = table_match.group(1) if table_match else None
+        # Enclose table name in backticks
+        insight_response = format_database_response(db_agent.query(f"SELECT COUNT(*) as total_rows, AVG(salary) as average_value FROM `{st.session_state.selected_table}` WHERE salary IS NOT NULL"), f"give me an insight about {st.session_state.selected_table} table", schema_info)
+        st.markdown(insight_response)
+        # Ask for operations
+        st.subheader("What operations do you want to perform?")
+        operations = st.multiselect("Suggested operations:", ["Clean Data", "Visualize Data", "Detailed Analysis", "Web Research", "Ask a specific question"])
+        if st.button("Proceed with Operations"):
+            st.session_state.chat_history.append({"role": "assistant", "content": f"Selected operations: {', '.join(operations)}"})
+            st.session_state.data = None
+            st.rerun()
 
-            if category == "Database query":
-                db_name_match = re.search(r"Database Name:\s*(.+?)(?:\n|$)", plan)
-                if db_name_match:
-                    response = "I am using a database called 'insightforge_db'."
+# File Upload Flow
+elif st.session_state.data_source == "Upload File":
+    st.subheader("Upload Your Data")
+    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+    if uploaded_file is not None:
+        st.session_state.data = pd.read_csv(uploaded_file)
+        st.success(f"File '{uploaded_file.name}' uploaded successfully.")
+        # Save the uploaded file
+        upload_path = os.path.join("data/uploads", uploaded_file.name)
+        with open(upload_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        # Display the first few rows
+        st.subheader("Data Preview")
+        st.dataframe(st.session_state.data.head())
+        # Ask for operations
+        st.subheader("What operations do you want to perform?")
+        operations = st.multiselect("Suggested operations:", ["Clean Data", "Visualize Data", "Detailed Analysis", "Web Research", "Ask a specific question"])
+        if st.button("Proceed with Operations"):
+            st.session_state.chat_history.append({"role": "assistant", "content": f"Selected operations: {', '.join(operations)}"})
+            st.rerun()
+
+# Chat interface (only if data is loaded or table is selected)
+if st.session_state.data is not None or st.session_state.selected_table is not None:
+    st.subheader("Ask a Question")
+    prompt = st.chat_input("Type your question here...")
+
+    if prompt:
+        # Add user message to chat history
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        
+        # Process the prompt
+        response = ""
+        image_path = None
+        
+        try:
+            # Use ContentGenerationAgent to classify the prompt and generate a plan
+            schema_info = db_agent.db.get_table_info()
+            
+            if isinstance(schema_info, str):
+                try:
+                    schema_info = json.loads(schema_info) if schema_info.strip().startswith('{') else ast.literal_eval(schema_info)
+                except (json.JSONDecodeError, ValueError, SyntaxError) as e:
+                    logging.error(f"Failed to parse schema_info: {e}")
+                    schema_info = {}
+            
+            columns = st.session_state.data.columns.tolist() if st.session_state.data is not None else []
+            prompt_analysis = content_agent.generate(
+                f"""
+                Analyze the following user prompt: '{prompt}'.
+                The user has access to a MySQL database named 'insightforge_db' with the following schema:
+                {schema_info}
+                The user has also uploaded a CSV file with the following columns (if any): {columns}.
+                
+                Determine the user's intent and classify the prompt into one of the following categories:
+                1. Database query (e.g., asking about tables, data in the database, or database metadata like its name)
+                2. Visualization request (e.g., asking for a plot, graph, or chart)
+                3. Web research (e.g., asking about trends, market analysis)
+                
+                Then, provide a plan to fulfill the request:
+                - For database queries: If asking about the database name, return: Database Name: insightforge_db
+                  If asking about tables, return: SQL Query: SHOW TABLES
+                  If asking how many tables, return: SQL Query: SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'insightforge_db'
+                  If asking for a detailed analysis of a table (e.g., 'give me an insight about' or 'detailed analysis of'), return a list of available columns with their types from the schema and prompt the user to specify a numeric column, or if a numeric column is detected, return: SQL Query: SELECT COUNT(*) as total_rows, AVG([numeric_column]) as average_value FROM [table_name] WHERE [numeric_column] IS NOT NULL
+                  For other data queries, return: SQL Query: [your query]
+                - For visualization requests: Specify the type of plot (scatter, histogram, heatmap, boxplot) and the columns to use (if mentioned) using the format: Plot Type: [type]\nX Column: [x_col]\nY Column: [y_col]\nHistogram Column: [hist_col]\nBoxplot Column: [box_col]\nTable Name: [table_name]
+                - For web research: Extract the topic to research using the format: Topic: [topic]
+                
+                Return your response in the following format:
+                Category: [category]
+                Plan: [your plan]
+                """
+            )
+            
+            # Parse the LLM's response with more robust regular expressions
+            category_match = re.search(r"Category:\s*(.+?)(?:\n|$)", prompt_analysis)
+            plan_match = re.search(r"Plan:\s*(.+)", prompt_analysis, re.DOTALL)
+            
+            if not category_match or not plan_match:
+                response = f"I couldn't understand your request. Could you please rephrase it?\n\nDebug Info:\n{prompt_analysis}"
+            else:
+                category = re.sub(r"^\d+\.\s*", "", category_match.group(1).strip())
+                plan = plan_match.group(1).strip()
+                
+                # Extract table_name from plan if available
+                table_name = None
+                table_match = re.search(r"Table Name:\s*([a-zA-Z_]+(?:\s+[a-zA-Z_]+)*)", plan, re.IGNORECASE)
+                if table_match:
+                    table_name = table_match.group(1)
                 else:
-                    sql_query_match = re.search(r"SQL Query:\s*(.*?)(?:\n|$)", plan)
-                    if sql_query_match:
-                        sql_query = sql_query_match.group(1).strip()
-                        # Replace [numeric_column] with a likely numeric column from schema
-                        if "[numeric_column]" in sql_query and table_name:
-                            if isinstance(schema_info, dict):
-                                numeric_cols = [col for col in schema_info.get(table_name, {}).get("columns", {}) 
-                                               if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE", "TINYINT", "BIGINT"))]
-                                print(f"Debug: Numeric columns detected = {numeric_cols}")
-                                if numeric_cols:
-                                    sql_query = sql_query.replace("[numeric_column]", numeric_cols[0])
-                                else:
-                                    # List available columns and prompt user
-                                    all_columns = schema_info.get(table_name, {}).get("columns", {})
-                                    if all_columns:
-                                        columns_list = "\n".join([f"- {col} ({schema_info.get(table_name, {}).get('columns', {}).get(col, {}).get('type', 'unknown')})" for col in all_columns])
-                                        response = f"No numeric column was automatically detected in the '{table_name}' table. Please specify a numeric column from the following list:\n{columns_list}\nExample: 'Give me a detailed analysis of layoffs table with column salary'."
+                    # Fallback to extract from question
+                    table_match = re.search(r"(?:insight about|insight of|detailed analysis of)\s+([a-zA-Z_]+(?:\s+[a-zA-Z_]+)*)\s+table", prompt.lower())
+                    table_name = table_match.group(1) if table_match else None
+
+                if category == "Database query":
+                    db_name_match = re.search(r"Database Name:\s*(.+?)(?:\n|$)", plan)
+                    if db_name_match:
+                        response = "I am using a database called 'insightforge_db'."
+                    else:
+                        sql_query_match = re.search(r"SQL Query:\s*(.*?)(?:\n|$)", plan)
+                        if sql_query_match:
+                            sql_query = sql_query_match.group(1).strip()
+                            # Replace [numeric_column] with a likely numeric column from schema
+                            if "[numeric_column]" in sql_query and table_name:
+                                if isinstance(schema_info, dict):
+                                    numeric_cols = [col for col in schema_info.get(table_name, {}).get("columns", {}) 
+                                                   if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE", "TINYINT", "BIGINT"))]
+                                    if numeric_cols:
+                                        sql_query = sql_query.replace("[numeric_column]", numeric_cols[0])
                                     else:
-                                        response = f"No column information available for '{table_name}' table. Please check the table schema or specify a column (e.g., 'Give me a detailed analysis of layoffs table with column salary')."
-                            else:
-                                response = "Schema information is unavailable. Please check the database connection."
-                        try:
-                            raw_result = db_agent.query(sql_query)
-                            response = format_database_response(raw_result, prompt, schema_info)
-                        except Exception as e:
-                            response = f"Error querying database: {str(e)}. Please check the table schema or specify a valid numeric column."
-                    else:
-                        response = "I understood you want a database query, but I couldn't generate a valid SQL query. Please rephrase your question."
-            
-            elif category == "Visualization request":
-                if st.session_state.data is None and not table_name:
-                    response = "Please upload a data file or specify a database table first to proceed with visualization requests."
-                else:
-                    plot_type_match = re.search(r"Plot Type:\s*(.*?)(?:\n|$)", plan)
-                    x_col_match = re.search(r"X Column:\s*(.*?)(?:\n|$)", plan)
-                    y_col_match = re.search(r"Y Column:\s*(.*?)(?:\n|$)", plan)
-                    hist_col_match = re.search(r"Histogram Column:\s*(.*?)(?:\n|$)", plan)
-                    box_col_match = re.search(r"Boxplot Column:\s*(.*?)(?:\n|$)", plan)
-                    
-                    plot_type = plot_type_match.group(1).strip() if plot_type_match else None
-                    x_col = x_col_match.group(1).strip() if x_col_match else None
-                    y_col = y_col_match.group(1).strip() if y_col_match else None
-                    hist_col = hist_col_match.group(1).strip() if hist_col_match else None
-                    box_col = box_col_match.group(1).strip() if box_col_match else None
-                    
-                    data = st.session_state.data if st.session_state.data is not None else None
-                    if plot_type and table_name and not data:
-                        query = f"SELECT {x_col if x_col else '*'}, {y_col if y_col else '*'}, {hist_col if hist_col else '*'}, {box_col if box_col else '*'} FROM {table_name} LIMIT 1000"
-                        result = db_agent.query(query)
-                        try:
-                            data = pd.DataFrame(ast.literal_eval(result) if isinstance(result, str) else result, columns=[x_col, y_col, hist_col, box_col] if any([x_col, y_col, hist_col, box_col]) else None)
-                        except Exception as e:
-                            response = f"Error fetching data for visualization: {str(e)}"
-
-                    if plot_type and data is not None:
-                        if "scatter" in plot_type.lower():
-                            image_path = viz_agent.generate_scatter(data, x_col=x_col, y_col=y_col)
-                            response = f"Here is the scatter plot{' of ' + x_col + ' vs ' + y_col if x_col and y_col else ''}:"
-                        elif "histogram" in plot_type.lower() or "distribution" in plot_type.lower():
-                            image_path = viz_agent.generate_distribution(data, hist_col=hist_col)
-                            response = f"Here is the distribution plot{' of ' + hist_col if hist_col else ''}:"
-                        elif "heatmap" in plot_type.lower():
-                            image_path = viz_agent.generate_correlation_heatmap(data)
-                            response = "Here is the correlation heatmap of the features:"
-                        elif "boxplot" in plot_type.lower():
-                            image_path = viz_agent.generate_boxplot(data, box_col=box_col)
-                            response = f"Here is the boxplot{' of ' + box_col if box_col else ''}:"
+                                        # List available columns and prompt user
+                                        all_columns = schema_info.get(table_name, {}).get("columns", {})
+                                        if all_columns:
+                                            columns_list = "\n".join([f"- {col} ({schema_info.get(table_name, {}).get('columns', {}).get(col, {}).get('type', 'unknown')})" for col in all_columns])
+                                            response = f"No numeric column was automatically detected in the '{table_name}' table. Please specify a numeric column from the following list:\n{columns_list}\nExample: 'Give me a detailed analysis of layoffs table with column salary'."
+                                        else:
+                                            response = f"No column information available for '{table_name}' table. Please check the table schema or specify a column (e.g., 'Give me a detailed analysis of layoffs table with column salary')."
+                                else:
+                                    response = "Schema information is unavailable. Please check the database connection."
+                            # Enclose table name in backticks
+                            sql_query = sql_query.replace(f"FROM {table_name}", f"FROM `{table_name}`")
+                            try:
+                                raw_result = db_agent.query(sql_query)
+                                response = format_database_response(raw_result, prompt, schema_info)
+                            except Exception as e:
+                                response = f"Error querying database: {str(e)}. Please check the table schema or specify a valid numeric column."
                         else:
-                            response = "I understood you want a visualization, but I couldn't determine the plot type. Please specify (e.g., 'scatter', 'histogram', 'heatmap', 'boxplot')."
+                            response = "I understood you want a database query, but I couldn't generate a valid SQL query. Please rephrase your question."
+                
+                elif category == "Visualization request":
+                    if st.session_state.data is None and not table_name:
+                        response = "Please upload a data file or specify a database table first to proceed with visualization requests."
                     else:
-                        response = "I understood you want a visualization, but no data is available. Please upload a file or specify a table."
-            
-            elif category == "Web research":
-                topic_match = re.search(r"Topic:\s*(.*?)(?:\n|$)", plan)
-                if topic_match:
-                    topic = topic_match.group(1).strip()
-                    response = web_agent.research(topic)
+                        plot_type_match = re.search(r"Plot Type:\s*(.*?)(?:\n|$)", plan)
+                        x_col_match = re.search(r"X Column:\s*(.*?)(?:\n|$)", plan)
+                        y_col_match = re.search(r"Y Column:\s*(.*?)(?:\n|$)", plan)
+                        hist_col_match = re.search(r"Histogram Column:\s*(.*?)(?:\n|$)", plan)
+                        box_col_match = re.search(r"Boxplot Column:\s*(.*?)(?:\n|$)", plan)
+                        
+                        plot_type = plot_type_match.group(1).strip() if plot_type_match else None
+                        x_col = x_col_match.group(1).strip() if x_col_match else None
+                        y_col = y_col_match.group(1).strip() if y_col_match else None
+                        hist_col = hist_col_match.group(1).strip() if hist_col_match else None
+                        box_col = box_col_match.group(1).strip() if box_col_match else None
+                        
+                        data = st.session_state.data if st.session_state.data is not None else None
+                        if plot_type and table_name and not data:
+                            # Enclose table name in backticks
+                            query = f"SELECT {x_col if x_col else '*'}, {y_col if y_col else '*'}, {hist_col if hist_col else '*'}, {box_col if box_col else '*'} FROM `{table_name}` LIMIT 1000"
+                            result = db_agent.query(query)
+                            try:
+                                data = pd.DataFrame(ast.literal_eval(result) if isinstance(result, str) else result, columns=[x_col, y_col, hist_col, box_col] if any([x_col, y_col, hist_col, box_col]) else None)
+                            except Exception as e:
+                                response = f"Error fetching data for visualization: {str(e)}"
+
+                        if plot_type and data is not None:
+                            if "scatter" in plot_type.lower():
+                                image_path = viz_agent.generate_scatter(data, x_col=x_col, y_col=y_col)
+                                response = f"Here is the scatter plot{' of ' + x_col + ' vs ' + y_col if x_col and y_col else ''}:"
+                            elif "histogram" in plot_type.lower() or "distribution" in plot_type.lower():
+                                image_path = viz_agent.generate_distribution(data, hist_col=hist_col)
+                                response = f"Here is the distribution plot{' of ' + hist_col if hist_col else ''}:"
+                            elif "heatmap" in plot_type.lower():
+                                image_path = viz_agent.generate_correlation_heatmap(data)
+                                response = "Here is the correlation heatmap of the features:"
+                            elif "boxplot" in plot_type.lower():
+                                image_path = viz_agent.generate_boxplot(data, box_col=box_col)
+                                response = f"Here is the boxplot{' of ' + box_col if box_col else ''}:"
+                            else:
+                                response = "I understood you want a visualization, but I couldn't determine the plot type. Please specify (e.g., 'scatter', 'histogram', 'heatmap', 'boxplot')."
+                        else:
+                            response = "I understood you want a visualization, but no data is available. Please upload a file or specify a table."
+                
+                elif category == "Web research":
+                    topic_match = re.search(r"Topic:\s*(.*?)(?:\n|$)", plan)
+                    if topic_match:
+                        topic = topic_match.group(1).strip()
+                        response = web_agent.research(topic)
+                    else:
+                        response = "I understood you want to research a topic, but I couldn't determine the topic. Please rephrase your question."
+                
                 else:
-                    response = "I understood you want to research a topic, but I couldn't determine the topic. Please rephrase your question."
-            
-            else:
-                response = "I couldn't categorize your request. Please try rephrasing it."
-    
-    except Exception as e:
-        response = f"Error processing your request: {str(e)}"
-    
-    # Add assistant response to chat history
-    st.session_state.chat_history.append({"role": "assistant", "content": response, "image": image_path})
+                    response = "I couldn't categorize your request. Please try rephrasing it."
+        
+        except Exception as e:
+            response = f"Error processing your request: {str(e)}"
+        
+        # Add assistant response to chat history
+        st.session_state.chat_history.append({"role": "assistant", "content": response, "image": image_path})
 
 # Display chat history
 for message in st.session_state.chat_history:

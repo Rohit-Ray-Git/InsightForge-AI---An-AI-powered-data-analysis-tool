@@ -1,10 +1,14 @@
 import os
+import logging
+import pymysql
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
 from dotenv import load_dotenv
-import pymysql
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DatabaseAgent:
     def __init__(self):
@@ -12,7 +16,7 @@ class DatabaseAgent:
         db_password = os.getenv("MYSQL_PASSWORD", "your_password")
         db_host = os.getenv("MYSQL_HOST", "localhost")
         db_port = os.getenv("MYSQL_PORT", "3306")
-        db_name = os.getenv("MYSQL_DB", "insightforge_db")
+        db_name = os.getenv("MYSQL_DB", "insightforge_db")  # Use env variable for db name
         
         db_uri = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         try:
@@ -24,107 +28,71 @@ class DatabaseAgent:
                 database=db_name,
                 port=int(db_port)
             )
-        except Exception as e:
-            raise ConnectionError(f"Failed to connect to MySQL: {str(e)}")
+            logging.info("Successfully connected to MySQL database.")
+        except pymysql.Error as e:
+            logging.error(f"Failed to connect to MySQL: {e}")
+            raise ConnectionError(f"Failed to connect to MySQL: {e}") from e
 
-        # Initialize Gemini model with Google API key
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",  # Use the appropriate Gemini model (e.g., "gemini-pro" or "gemini-1.5-pro" depending on availability)
+            model=os.getenv("GEMINI_MODEL", "gemini-pro"),  # Use env variable for model
             api_key=os.getenv("GOOGLE_API_KEY")
         )
+        self.schema_cache = None  # Initialize schema cache
 
     def query(self, question: str) -> str:
-        """
-        Execute an SQL query based on the user's question.
-        
-        Args:
-            question (str): The user's question or SQL query to execute.
-            
-        Returns:
-            str: The query results or an error message.
-        """
+        """Execute an SQL query based on the user's question."""
         try:
-            # If the question is already an SQL query (e.g., "SHOW TABLES;"), execute it directly
             if question.strip().upper().startswith(("SELECT", "SHOW", "DESCRIBE", "EXPLAIN")):
                 result = self.db.run(question)
                 return str(result) if result else "No data found for your query."
-            
-            # Use the detailed schema for better query generation
-            schema_info = self.get_detailed_table_info()
-            print(f"Debug (DatabaseAgent): Schema info = {schema_info}")
+
+            # Use cached schema if available
+            if self.schema_cache is None:
+                self.schema_cache = self.get_detailed_table_info()
+            schema_info = self.schema_cache
+
+            logging.debug(f"Schema info = {schema_info}")
             prompt = (
                 f"Given this database schema:\n{schema_info}\n"
-                f"Generate an SQL query to answer this question: {question}\n"
-                "Ensure the query uses a numeric column (with types INT, DECIMAL, FLOAT, DOUBLE, TINYINT, or BIGINT) for aggregations (e.g., AVG, SUM) if required. "
-                "If no numeric column is specified and multiple numeric columns exist, prefer 'salary' or the first numeric column found. "
-                "Return only the SQL query, without any additional text or explanation."
+                f"Generate an SQL query to answer: {question}\n"
+                "Ensure the query uses a numeric column for aggregations if required. "
+                "Return only the SQL query."
             )
             sql_query = self.llm.invoke(prompt).content.strip()
-            print(f"Debug (DatabaseAgent): Generated SQL query = {sql_query}")
-            
-            # Execute the generated SQL query
+            logging.debug(f"Generated SQL query = {sql_query}")
+
             result = self.db.run(sql_query)
             return str(result) if result else "No data found for your query."
+        except pymysql.Error as e:
+            logging.error(f"Database query error: {e}")
+            return f"Error querying database: {e}"
         except Exception as e:
-            return f"Error querying database: {str(e)}"
-        finally:
-            pass
+            logging.error(f"An unexpected error occurred: {e}")
+            return f"An unexpected error occurred: {e}"
 
     def get_detailed_table_info(self):
-        """
-        Fetch detailed schema information including table names and column types.
-        
-        Returns:
-            dict: A dictionary with table names as keys and column details as values.
-        """
+        """Fetch detailed schema information."""
         schema = {}
-        cursor = self.raw_db.cursor()
-        try:
-            cursor.execute("SHOW TABLES")
-            tables = [table[0] for table in cursor.fetchall()]
-            for table_name in tables:
-                cursor.execute(f"DESCRIBE {table_name}")
-                columns = {}
-                for row in cursor.fetchall():
-                    col_name, col_type, _, _, _, _ = row
-                    columns[col_name] = {"type": col_type.upper()}  # Convert to uppercase for consistency
-                if columns:
-                    schema[table_name] = {"columns": columns}
-            print(f"Debug (DatabaseAgent): Detailed schema = {schema}")
-            return schema
-        except Exception as e:
-            print(f"Debug (DatabaseAgent): Error fetching detailed table info: {e}")
-            return {}
-        finally:
-            cursor.close()
-
-    def fetch_all_tables(self) -> str:
-        """
-        Fetch the list of all tables in the database and return them in a user-friendly format.
-        
-        Returns:
-            str: A string listing the tables in layman's terms.
-        """
-        try:
-            tables = self.db.get_usable_table_names()
-            if not tables:
-                return "There are no tables in the database right now."
-            
-            formatted_tables = [table.replace("_", " ") for table in tables]
-            if len(formatted_tables) == 1:
-                return f"The database has one table called '{formatted_tables[0]}'."
-            else:
-                table_list = ", ".join(f"'{table}'" for table in formatted_tables[:-1])
-                last_table = f"'{formatted_tables[-1]}'"
-                return f"The database has these tables: {table_list} and {last_table}."
-        except Exception as e:
-            return f"Sorry, I couldn't get the list of tables because of an error: {str(e)}"
+        with self.raw_db.cursor() as cursor:  # Use context manager
+            try:
+                cursor.execute("SHOW TABLES")
+                tables = [table[0] for table in cursor.fetchall()]
+                for table_name in tables:
+                    cursor.execute(f"DESCRIBE {table_name}")
+                    columns = {}
+                    for row in cursor.fetchall():
+                        col_name, col_type, _, _, _, _ = row
+                        columns[col_name] = {"type": col_type.upper()}
+                    if columns:
+                        schema[table_name] = {"columns": columns}
+                logging.debug(f"Detailed schema = {schema}")
+                return schema
+            except pymysql.Error as e:
+                logging.error(f"Error fetching detailed table info: {e}")
+                return {}
 
     def __del__(self):
-        """Ensure the raw database connection is closed when the object is destroyed."""
+        """Ensure the raw database connection is closed."""
         if hasattr(self, 'raw_db') and self.raw_db.open:
             self.raw_db.close()
-
-if __name__ == "__main__":
-    agent = DatabaseAgent()
-    print(agent.get_detailed_table_info())
+            logging.info("Closed raw database connection.")

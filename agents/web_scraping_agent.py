@@ -2,7 +2,7 @@
 from crewai import Agent
 from crewai import Task
 from crewai.tools import BaseTool
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from serpapi import GoogleSearch
 import os
 from dotenv import load_dotenv
@@ -28,7 +28,7 @@ class SerpSearchTool(BaseTool):
 
 class WebScrapingAgent:
     def __init__(self):
-        self.llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
         
         # Instantiate the custom tool
         serp_tool = SerpSearchTool()
