@@ -1,8 +1,8 @@
-# agents/database_agent.py
 import os
 from langchain_groq import ChatGroq
 from langchain_community.utilities import SQLDatabase
 from dotenv import load_dotenv
+import pymysql
 
 load_dotenv()
 
@@ -17,10 +17,18 @@ class DatabaseAgent:
         db_uri = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         try:
             self.db = SQLDatabase.from_uri(db_uri)
+            # Establish a raw PyMySQL connection for detailed schema access
+            self.raw_db = pymysql.connect(
+                host=db_host,
+                user=db_user,
+                password=db_password,
+                database=db_name,
+                port=int(db_port)
+            )
         except Exception as e:
             raise ConnectionError(f"Failed to connect to MySQL: {str(e)}")
 
-        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGroq(model="llama3-70b-8192", api_key=os.getenv("GROQ_API_KEY"))
 
     def query(self, question: str) -> str:
         """
@@ -38,12 +46,12 @@ class DatabaseAgent:
                 result = self.db.run(question)
                 return str(result) if result else "No data found for your query."
             
-            # Otherwise, use the LLM to generate an SQL query
-            schema_info = self.db.get_table_info()
+            # Use the detailed schema for better query generation
+            schema_info = self.get_detailed_table_info()
             prompt = (
                 f"Given this database schema:\n{schema_info}\n"
                 f"Generate an SQL query to answer this question: {question}\n"
-                "Return only the SQL query, without any additional text or explanation."
+                "Ensure the query uses a numeric column for aggregations (e.g., AVG, SUM) if required, and return only the SQL query, without any additional text or explanation."
             )
             sql_query = self.llm.invoke(prompt).content.strip()
             
@@ -52,6 +60,36 @@ class DatabaseAgent:
             return str(result) if result else "No data found for your query."
         except Exception as e:
             return f"Error querying database: {str(e)}"
+        finally:
+            # Ensure cursor is closed if used (though not explicitly here, good practice)
+            pass
+
+    def get_detailed_table_info(self):
+        """
+        Fetch detailed schema information including table names and column types.
+        
+        Returns:
+            dict: A dictionary with table names as keys and column details as values.
+        """
+        schema = {}
+        cursor = self.raw_db.cursor()
+        try:
+            cursor.execute("SHOW TABLES")
+            tables = [table[0] for table in cursor.fetchall()]
+            for table_name in tables:
+                cursor.execute(f"DESCRIBE {table_name}")
+                columns = {}
+                for row in cursor.fetchall():
+                    col_name, col_type, _, _, _, _ = row
+                    columns[col_name] = {"type": col_type.upper()}  # Convert to uppercase for consistency
+                if columns:
+                    schema[table_name] = {"columns": columns}
+            return schema
+        except Exception as e:
+            print(f"Debug: Error fetching detailed table info: {e}")
+            return {}
+        finally:
+            cursor.close()
 
     def fetch_all_tables(self) -> str:
         """
@@ -76,3 +114,13 @@ class DatabaseAgent:
                 return f"The database has these tables: {table_list} and {last_table}."
         except Exception as e:
             return f"Sorry, I couldn't get the list of tables because of an error: {str(e)}"
+
+    def __del__(self):
+        """Ensure the raw database connection is closed when the object is destroyed."""
+        if hasattr(self, 'raw_db') and self.raw_db.open:
+            self.raw_db.close()
+
+# Example usage (optional, for testing)
+if __name__ == "__main__":
+    agent = DatabaseAgent()
+    print(agent.get_detailed_table_info())

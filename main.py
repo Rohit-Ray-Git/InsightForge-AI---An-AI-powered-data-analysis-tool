@@ -55,7 +55,7 @@ st.markdown(
     Examples:  
     - "What tables are in the database?"  
     - "How many tables?"  
-    - "Give me a detailed analysis of layoffs table"  
+    - "Give me a detailed analysis of layoffs table with column salary"  
     - "Show me a histogram of layoffs table with column salary"  
     - "Show me a scatter plot of price vs income from uploaded data"
     """
@@ -76,7 +76,7 @@ def compute_statistics(table_name, schema_info):
             return None
     
     numeric_cols = [col for col in schema_info.get(table_name, {}).get("columns", {}) 
-                   if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE"))]
+                   if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE", "TINYINT", "BIGINT"))]
     if not numeric_cols:
         return None
     
@@ -252,7 +252,7 @@ if prompt:
             - For database queries: If asking about the database name, return: Database Name: insightforge_db
               If asking about tables, return: SQL Query: SHOW TABLES
               If asking how many tables, return: SQL Query: SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'insightforge_db'
-              If asking for a detailed analysis of a table (e.g., 'give me an insight about' or 'detailed analysis of'), return: SQL Query: SELECT COUNT(*) as total_rows, AVG([numeric_column]) as average_value FROM [table_name] WHERE [numeric_column] IS NOT NULL
+              If asking for a detailed analysis of a table (e.g., 'give me an insight about' or 'detailed analysis of'), return a list of available columns with their types from the schema and prompt the user to specify a numeric column, or if a numeric column is detected, return: SQL Query: SELECT COUNT(*) as total_rows, AVG([numeric_column]) as average_value FROM [table_name] WHERE [numeric_column] IS NOT NULL
               For other data queries, return: SQL Query: [your query]
             - For visualization requests: Specify the type of plot (scatter, histogram, heatmap, boxplot) and the columns to use (if mentioned) using the format: Plot Type: [type]\nX Column: [x_col]\nY Column: [y_col]\nHistogram Column: [hist_col]\nBoxplot Column: [box_col]\nTable Name: [table_name]
             - For web research: Extract the topic to research using the format: Topic: [topic]
@@ -298,12 +298,18 @@ if prompt:
                         if "[numeric_column]" in sql_query and table_name:
                             if isinstance(schema_info, dict):
                                 numeric_cols = [col for col in schema_info.get(table_name, {}).get("columns", {}) 
-                                               if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE"))]
+                                               if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE", "TINYINT", "BIGINT"))]
                                 print(f"Debug: Numeric columns detected = {numeric_cols}")
                                 if numeric_cols:
                                     sql_query = sql_query.replace("[numeric_column]", numeric_cols[0])
                                 else:
-                                    response = "No numeric column found in the table. Please specify a numeric column (e.g., 'Detailed analysis of layoffs table with column salary')."
+                                    # List available columns and prompt user
+                                    all_columns = schema_info.get(table_name, {}).get("columns", {})
+                                    if all_columns:
+                                        columns_list = "\n".join([f"- {col} ({schema_info.get(table_name, {}).get('columns', {}).get(col, {}).get('type', 'unknown')})" for col in all_columns])
+                                        response = f"No numeric column was automatically detected in the '{table_name}' table. Please specify a numeric column from the following list:\n{columns_list}\nExample: 'Give me a detailed analysis of layoffs table with column salary'."
+                                    else:
+                                        response = f"No column information available for '{table_name}' table. Please check the table schema or specify a column (e.g., 'Give me a detailed analysis of layoffs table with column salary')."
                             else:
                                 response = "Schema information is unavailable. Please check the database connection."
                         try:
@@ -383,5 +389,3 @@ for message in st.session_state.chat_history:
                 st.image(message["image"], caption=message["content"], use_column_width=True)
             else:
                 st.markdown(message["image"])
-
-# Ensure the script ends here, no stray return statements
