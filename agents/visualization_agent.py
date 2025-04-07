@@ -12,7 +12,7 @@ class VisualizationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        self.llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", api_key=os.getenv("GROQ_API_KEY"))
         self.agent = Agent(
             role="Data Visualizer",
             goal="Generate insightful visualizations from data",

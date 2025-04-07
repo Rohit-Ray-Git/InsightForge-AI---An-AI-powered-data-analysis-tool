@@ -20,7 +20,7 @@ class DatabaseAgent:
         except Exception as e:
             raise ConnectionError(f"Failed to connect to MySQL: {str(e)}")
 
-        self.llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGroq(model="deepseek-r1-distill-llama-70b", api_key=os.getenv("GROQ_API_KEY"))
 
     def query(self, question: str) -> str:
         """
