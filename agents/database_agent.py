@@ -17,7 +17,6 @@ class DatabaseAgent:
         db_uri = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         try:
             self.db = SQLDatabase.from_uri(db_uri)
-            # Establish a raw PyMySQL connection for detailed schema access
             self.raw_db = pymysql.connect(
                 host=db_host,
                 user=db_user,
@@ -48,12 +47,16 @@ class DatabaseAgent:
             
             # Use the detailed schema for better query generation
             schema_info = self.get_detailed_table_info()
+            print(f"Debug (DatabaseAgent): Schema info = {schema_info}")  # Added debugging
             prompt = (
                 f"Given this database schema:\n{schema_info}\n"
                 f"Generate an SQL query to answer this question: {question}\n"
-                "Ensure the query uses a numeric column for aggregations (e.g., AVG, SUM) if required, and return only the SQL query, without any additional text or explanation."
+                "Ensure the query uses a numeric column (with types INT, DECIMAL, FLOAT, DOUBLE, TINYINT, or BIGINT) for aggregations (e.g., AVG, SUM) if required. "
+                "If no numeric column is specified and multiple numeric columns exist, prefer 'salary' or the first numeric column found. "
+                "Return only the SQL query, without any additional text or explanation."
             )
             sql_query = self.llm.invoke(prompt).content.strip()
+            print(f"Debug (DatabaseAgent): Generated SQL query = {sql_query}")  # Added debugging
             
             # Execute the generated SQL query
             result = self.db.run(sql_query)
@@ -61,7 +64,6 @@ class DatabaseAgent:
         except Exception as e:
             return f"Error querying database: {str(e)}"
         finally:
-            # Ensure cursor is closed if used (though not explicitly here, good practice)
             pass
 
     def get_detailed_table_info(self):
@@ -84,9 +86,10 @@ class DatabaseAgent:
                     columns[col_name] = {"type": col_type.upper()}  # Convert to uppercase for consistency
                 if columns:
                     schema[table_name] = {"columns": columns}
+            print(f"Debug (DatabaseAgent): Detailed schema = {schema}")  # Added debugging
             return schema
         except Exception as e:
-            print(f"Debug: Error fetching detailed table info: {e}")
+            print(f"Debug (DatabaseAgent): Error fetching detailed table info: {e}")
             return {}
         finally:
             cursor.close()
@@ -103,8 +106,6 @@ class DatabaseAgent:
             if not tables:
                 return "There are no tables in the database right now."
             
-            # Format the table names in a readable way
-            # Replace underscores with spaces for better readability
             formatted_tables = [table.replace("_", " ") for table in tables]
             if len(formatted_tables) == 1:
                 return f"The database has one table called '{formatted_tables[0]}'."
@@ -120,7 +121,6 @@ class DatabaseAgent:
         if hasattr(self, 'raw_db') and self.raw_db.open:
             self.raw_db.close()
 
-# Example usage (optional, for testing)
 if __name__ == "__main__":
     agent = DatabaseAgent()
     print(agent.get_detailed_table_info())
