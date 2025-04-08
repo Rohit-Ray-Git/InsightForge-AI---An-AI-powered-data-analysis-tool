@@ -35,9 +35,10 @@ class DatabaseAgent:
 
         self.llm = ChatGoogleGenerativeAI(
             model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),  # Use env variable for model
-            api_key=os.getenv("GOOGLE_API_KEY"),
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
             convert_system_message_to_human=True,
-            api_version="v1"
+            api_version="v1",
+            client=None # Add this line
         )
         self.schema_cache = None  # Initialize schema cache
 

@@ -47,78 +47,143 @@ os.makedirs("data/reports", exist_ok=True)
 st.title("InsightForge AI - Advanced Data Analysis Tool")
 st.markdown("Unlock deep insights from your data with comprehensive statistical analysis and visualizations.")
 
-def compute_statistics(table_name, schema_info):
-    """Compute statistical summary for numeric columns in the table."""
-    # Parse schema_info if it's a string
-    if isinstance(schema_info, str):
-        try:
-            schema_info = json.loads(schema_info) if schema_info.strip().startswith('{') else ast.literal_eval(schema_info)
-        except (json.JSONDecodeError, ValueError, SyntaxError):
-            logging.error(f"Failed to parse schema_info as dictionary: {schema_info}")
-            return None
-
-    numeric_cols = [col for col in schema_info.get(table_name, {}).get("columns", {})
-                    if schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE", "TINYINT", "BIGINT"))]
+def compute_statistics(data):
+    """Compute statistical summary for numeric columns in the DataFrame."""
+    numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
     if not numeric_cols:
-        return {}  # Return an empty dictionary if no numeric columns
+        return {}
 
     stats = {}
-    # Enclose table name in backticks
-    query = f"SELECT {', '.join(numeric_cols)} FROM `{table_name}` LIMIT 1000"  # Limit to 1000 rows for performance
-    result = db_agent.query(query)
-    try:
-        data = ast.literal_eval(result) if isinstance(result, str) else result
-        if data and isinstance(data, list):
-            df = pd.DataFrame(data, columns=numeric_cols)
-            for col in numeric_cols:
-                col_data = df[col].dropna()
-                if len(col_data) > 0:
-                    stats[col] = {
-                        "count": int(col_data.count()),
-                        "mean": float(col_data.mean()) if isinstance(col_data.mean(), Decimal) else col_data.mean(),
-                        "median": float(col_data.median()) if isinstance(col_data.median(), Decimal) else col_data.median(),
-                        "std": float(col_data.std()) if isinstance(col_data.std(), Decimal) else col_data.std(),
-                        "min": float(col_data.min()) if isinstance(col_data.min(), Decimal) else col_data.min(),
-                        "max": float(col_data.max()) if isinstance(col_data.max(), Decimal) else col_data.max(),
-                        "q1": float(col_data.quantile(0.25)) if isinstance(col_data.quantile(0.25), Decimal) else col_data.quantile(0.25),
-                        "q3": float(col_data.quantile(0.75)) if isinstance(col_data.quantile(0.75), Decimal) else col_data.quantile(0.75)
-                    }
-    except Exception as e:
-        logging.error(f"Error computing statistics: {e}")
-        return {}  # Return an empty dictionary on error
+    for col in numeric_cols:
+        col_data = data[col].dropna()
+        if len(col_data) > 0:
+            stats[col] = {
+                "count": int(col_data.count()),
+                "mean": float(col_data.mean()) if isinstance(col_data.mean(), Decimal) else col_data.mean(),
+                "median": float(col_data.median()) if isinstance(col_data.median(), Decimal) else col_data.median(),
+                "std": float(col_data.std()) if isinstance(col_data.std(), Decimal) else col_data.std(),
+                "min": float(col_data.min()) if isinstance(col_data.min(), Decimal) else col_data.min(),
+                "max": float(col_data.max()) if isinstance(col_data.max(), Decimal) else col_data.max(),
+                "q1": float(col_data.quantile(0.25)) if isinstance(col_data.quantile(0.25), Decimal) else col_data.quantile(0.25),
+                "q3": float(col_data.quantile(0.75)) if isinstance(col_data.quantile(0.75), Decimal) else col_data.quantile(0.75)
+            }
     return stats
 
-def analyze_categorical_columns(table_name, schema_info):
+def analyze_categorical_columns(data):
     """Analyze categorical columns and provide insights."""
-    if isinstance(schema_info, str):
-        try:
-            schema_info = json.loads(schema_info) if schema_info.strip().startswith('{') else ast.literal_eval(schema_info)
-        except (json.JSONDecodeError, ValueError, SyntaxError):
-            logging.error(f"Failed to parse schema_info as dictionary: {schema_info}")
-            return {}
-
-    categorical_cols = [col for col in schema_info.get(table_name, {}).get("columns", {})
-                        if not schema_info.get(table_name, {}).get("columns", {}).get(col, {}).get("type").startswith(("INT", "DECIMAL", "FLOAT", "DOUBLE", "TINYINT", "BIGINT"))]
-
+    categorical_cols = data.select_dtypes(include=['object', 'category']).columns.tolist()
     if not categorical_cols:
         return {}
 
     categorical_insights = {}
     for col in categorical_cols:
-        # Enclose table name in backticks
-        query = f"SELECT `{col}`, COUNT(*) FROM `{table_name}` GROUP BY `{col}` ORDER BY COUNT(*) DESC LIMIT 5"
-        result = db_agent.query(query)
-        try:
-            data = ast.literal_eval(result) if isinstance(result, str) else result
-            if data and isinstance(data, list):
-                categorical_insights[col] = {
-                    "top_values": [{"value": row[0], "count": row[1]} for row in data]
-                }
-        except Exception as e:
-            logging.error(f"Error analyzing categorical column {col}: {e}")
-            categorical_insights[col] = {"error": str(e)}
-
+        top_values = data[col].value_counts().head(5).to_dict()
+        categorical_insights[col] = {
+            "top_values": [{"value": value, "count": count} for value, count in top_values.items()]
+        }
     return categorical_insights
+
+def generate_data_report(data):
+    """Generate a detailed report for the uploaded data."""
+    numeric_stats = compute_statistics(data)
+    categorical_insights = analyze_categorical_columns(data)
+    sample_data = data.head().to_string()
+
+    # Format numeric statistics
+    stats_text = ""
+    if numeric_stats:
+        stats_text = "\n".join(
+            [f"**{col} Statistics:**\n"
+             f"- Count: {stat['count']}\n"
+             f"- Mean: {stat['mean']:.2f}\n"
+             f"- Median: {stat['median']:.2f}\n"
+             f"- Standard Deviation: {stat['std']:.2f}\n"
+             f"- Minimum: {stat['min']:.2f}\n"
+             f"- Maximum: {stat['max']:.2f}\n"
+             f"- 1st Quartile (Q1): {stat['q1']:.2f}\n"
+             f"- 3rd Quartile (Q3): {stat['q3']:.2f}"
+             for col, stat in numeric_stats.items()]
+        )
+    else:
+        stats_text = "No numeric columns found for statistical analysis."
+
+    # Format categorical insights
+    categorical_text = ""
+    if categorical_insights:
+        categorical_text = "\n".join(
+            [f"**{col} Top Values:**\n" + "\n".join(
+                [f"- {item['value']}: {item['count']}" for item in insights['top_values']]
+            )
+             for col, insights in categorical_insights.items()]
+        )
+    else:
+        categorical_text = "No categorical columns found for analysis."
+
+    # Generate insight with LLM
+    insight_prompt = (
+        f"Based on the following analysis of the uploaded data:\n"
+        f"**Numeric Statistics:**\n{stats_text}\n\n"
+        f"**Categorical Insights:**\n{categorical_text}\n\n"
+        f"**Sample Data:**\n{sample_data}\n\n"
+        f"Provide a detailed report (2-3 paragraphs) summarizing the key findings. "
+        f"Include observations about trends, distributions, typical values, variability, and potential business implications or uses. "
+        f"Do not reproduce the raw data, but rather synthesize the information into meaningful insights."
+    )
+    insight = content_agent.generate(insight_prompt)
+
+    return f"### Analysis of Uploaded Data\n\n" \
+           f"{stats_text}\n\n" \
+           f"{categorical_text}\n\n" \
+           f"**Insight Report:**\n{insight}"
+
+def perform_operation(operation, data, table_name, schema_info):
+    """Perform the selected operation and provide insights."""
+    if operation == "None":
+        return "No operation selected."
+    elif operation == "Clean Data":
+        # Placeholder for data cleaning logic
+        cleaning_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what data cleaning steps would you recommend? Provide a detailed plan.")
+        # Enclose table name in backticks
+        if table_name:
+            sample_query = f"SELECT * FROM `{table_name}` LIMIT 5"
+            sample_result = db_agent.query(sample_query)
+            try:
+                sample_data = ast.literal_eval(sample_result) if isinstance(sample_result, str) else sample_result
+            except (ValueError, SyntaxError):
+                sample_data = eval(sample_result) if isinstance(sample_result, str) else sample_result
+            sample_text = str(sample_data) if sample_data else "no sample data available"
+        else:
+            sample_text = data.head().to_string() if data is not None else "No data available"
+        cleaning_result = content_agent.generate(f"Based on the cleaning plan: {cleaning_plan}, clean the following data: {sample_text}. Provide the cleaned data and a summary of the changes made.")
+        return f"**Data Cleaning Plan:**\n{cleaning_plan}\n\n**Cleaning Result:**\n{cleaning_result}"
+    elif operation == "Visualize Data":
+        # Placeholder for data visualization logic
+        visualization_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of visualization would be most insightful? Provide a detailed plan.")
+        visualization_result = content_agent.generate(f"Based on the visualization plan: {visualization_plan}, generate the visualization. Provide the visualization and a summary of the changes made.")
+        return f"**Visualization Plan:**\n{visualization_plan}\n\n**Visualization Result:**\n{visualization_result}"
+    elif operation == "Detailed Analysis":
+        # Placeholder for detailed analysis logic
+        if table_name:
+            analysis_agent = AnalysisAgent(pd.DataFrame(ast.literal_eval(db_agent.query(f"SELECT * FROM `{table_name}`"))))
+            data_for_report = db_agent.query(f"SELECT * FROM `{table_name}`")
+        else:
+            analysis_agent = AnalysisAgent(data)
+            data_for_report = data.to_string()
+        eda_results, insight = analysis_agent.analyze()
+        report = report_agent.generate_report(data_for_report, eda_results, insight)
+        return f"**Detailed Analysis Report:**\n{report}"
+    elif operation == "Web Research":
+        # Placeholder for web research logic
+        research_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of web research would be most insightful? Provide a detailed plan.")
+        research_result = content_agent.generate(f"Based on the research plan: {research_plan}, generate the research. Provide the research and a summary of the changes made.")
+        return f"**Research Plan:**\n{research_plan}\n\n**Research Result:**\n{research_result}"
+    elif operation == "Ask a specific question":
+        # Placeholder for asking a specific question logic
+        question_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of question would be most insightful? Provide a detailed plan.")
+        question_result = content_agent.generate(f"Based on the question plan: {question_plan}, generate the question. Provide the question and a summary of the changes made.")
+        return f"**Question Plan:**\n{question_plan}\n\n**Question Result:**\n{question_result}"
+    else:
+        return "Invalid operation selected."
 
 def format_database_response(raw_result, question, schema_info):
     """Convert raw database query results into detailed insights with statistical analysis."""
@@ -175,73 +240,13 @@ def format_database_response(raw_result, question, schema_info):
                 
                 if table_name is None:
                     return "Could not determine the table name for analysis."
-
-                # Compute detailed statistics for numeric columns
-                numeric_stats = compute_statistics(table_name, schema_info)
-
-                # Analyze categorical columns
-                categorical_insights = analyze_categorical_columns(table_name, schema_info)
-
-                # Prepare sample data
-                sample_text = "no sample data available"
-                if table_name:
-                    # Enclose table name in backticks
-                    sample_query = f"SELECT * FROM `{table_name}` LIMIT 5"
-                    sample_result = db_agent.query(sample_query)
-                    try:
-                        sample_data = ast.literal_eval(sample_result) if isinstance(sample_result, str) else sample_result
-                    except (ValueError, SyntaxError):
-                        sample_data = eval(sample_result) if isinstance(sample_result, str) else sample_result
-                    sample_text = str(sample_data) if sample_data else "no sample data available"
-
-                # Format numeric statistics
-                stats_text = ""
-                if numeric_stats:
-                    stats_text = "\n".join(
-                        [f"**{col} Statistics:**\n"
-                         f"- Count: {stat['count']}\n"
-                         f"- Mean: {stat['mean']:.2f}\n"
-                         f"- Median: {stat['median']:.2f}\n"
-                         f"- Standard Deviation: {stat['std']:.2f}\n"
-                         f"- Minimum: {stat['min']:.2f}\n"
-                         f"- Maximum: {stat['max']:.2f}\n"
-                         f"- 1st Quartile (Q1): {stat['q1']:.2f}\n"
-                         f"- 3rd Quartile (Q3): {stat['q3']:.2f}"
-                         for col, stat in numeric_stats.items()]
-                    )
-                else:
-                    stats_text = "No numeric columns found for statistical analysis."
-
-                # Format categorical insights
-                categorical_text = ""
-                if categorical_insights:
-                    categorical_text = "\n".join(
-                        [f"**{col} Top Values:**\n" + "\n".join(
-                            [f"- {item['value']}: {item['count']}" for item in insights['top_values']]
-                        )
-                         for col, insights in categorical_insights.items()]
-                    )
-                else:
-                    categorical_text = "No categorical columns found for analysis."
-
-                # Generate insight with LLM
-                insight_prompt = (
-                    f"Based on the following analysis of the '{table_name}' table:\n"
-                    f"**Numeric Statistics:**\n{stats_text}\n\n"
-                    f"**Categorical Insights:**\n{categorical_text}\n\n"
-                    f"**Sample Data:**\n{sample_text}\n\n"
-                    f"Provide a detailed report (2-3 paragraphs) summarizing the key findings. "
-                    f"Include observations about trends, distributions, typical values, variability, and potential business implications or uses. "
-                    f"Do not reproduce the raw data, but rather synthesize the information into meaningful insights."
-                )
-                insight_response = content_agent.generate(insight_prompt)
-                insight_match = re.search(r"Plan:\s*(.+)", insight_response, re.DOTALL)
-                insight = insight_match.group(1).strip() if insight_match else "I couldn’t generate a detailed insight about this data."
-
-                return f"### Analysis of '{table_name}' Table\n\n" \
-                       f"{stats_text}\n\n" \
-                       f"{categorical_text}\n\n" \
-                       f"**Insight Report:**\n{insight}"
+                
+                # Generate the report
+                analysis_agent = AnalysisAgent(pd.DataFrame(ast.literal_eval(db_agent.query(f"SELECT * FROM `{table_name}`"))))
+                data_for_report = db_agent.query(f"SELECT * FROM `{table_name}`")
+                eda_results, insight = analysis_agent.analyze()
+                report = report_agent.generate_report(data_for_report, eda_results, insight)
+                return f"**Detailed Analysis Report:**\n{report}"
             return str(cleaned_result)
         elif isinstance(cleaned_result, tuple) and len(cleaned_result) == 1 and isinstance(cleaned_result[0], (int, float, Decimal)):
             count = float(cleaned_result[0]) if isinstance(cleaned_result[0], Decimal) else cleaned_result[0]
@@ -253,53 +258,6 @@ def format_database_response(raw_result, question, schema_info):
         return str(cleaned_result)
     except Exception as e:
         return f"Sorry, I couldn’t understand the result: {str(e)}. Please try rephrasing your question or check the table schema."
-
-def perform_operation(operation, data, table_name, schema_info):
-    """Perform the selected operation and provide insights."""
-    if operation == "None":
-        return "No operation selected."
-    elif operation == "Clean Data":
-        # Placeholder for data cleaning logic
-        cleaning_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what data cleaning steps would you recommend? Provide a detailed plan.")
-        # Enclose table name in backticks
-        if table_name:
-            sample_query = f"SELECT * FROM `{table_name}` LIMIT 5"
-            sample_result = db_agent.query(sample_query)
-            try:
-                sample_data = ast.literal_eval(sample_result) if isinstance(sample_result, str) else sample_result
-            except (ValueError, SyntaxError):
-                sample_data = eval(sample_result) if isinstance(sample_result, str) else sample_result
-            sample_text = str(sample_data) if sample_data else "no sample data available"
-        else:
-            sample_text = data.head().to_string() if data is not None else "No data available"
-        cleaning_result = content_agent.generate(f"Based on the cleaning plan: {cleaning_plan}, clean the following data: {sample_text}. Provide the cleaned data and a summary of the changes made.")
-        return f"**Data Cleaning Plan:**\n{cleaning_plan}\n\n**Cleaning Result:**\n{cleaning_result}"
-    elif operation == "Visualize Data":
-        # Placeholder for data visualization logic
-        visualization_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of visualization would be most insightful? Provide a detailed plan.")
-        visualization_result = content_agent.generate(f"Based on the visualization plan: {visualization_plan}, generate the visualization. Provide the visualization and a summary of the changes made.")
-        return f"**Visualization Plan:**\n{visualization_plan}\n\n**Visualization Result:**\n{visualization_result}"
-    elif operation == "Detailed Analysis":
-        # Placeholder for detailed analysis logic
-        if table_name:
-            analysis_agent = AnalysisAgent(pd.DataFrame(ast.literal_eval(db_agent.query(f"SELECT * FROM `{table_name}`"))))
-        else:
-            analysis_agent = AnalysisAgent(data)
-        eda_results, insight = analysis_agent.analyze()
-        report = report_agent.generate_report(data, eda_results, insight)
-        return f"**Detailed Analysis Report:**\n{report}"
-    elif operation == "Web Research":
-        # Placeholder for web research logic
-        research_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of web research would be most insightful? Provide a detailed plan.")
-        research_result = content_agent.generate(f"Based on the research plan: {research_plan}, generate the research. Provide the research and a summary of the changes made.")
-        return f"**Research Plan:**\n{research_plan}\n\n**Research Result:**\n{research_result}"
-    elif operation == "Ask a specific question":
-        # Placeholder for asking a specific question logic
-        question_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of question would be most insightful? Provide a detailed plan.")
-        question_result = content_agent.generate(f"Based on the question plan: {question_plan}, generate the question. Provide the question and a summary of the changes made.")
-        return f"**Question Plan:**\n{question_plan}\n\n**Question Result:**\n{question_result}"
-    else:
-        return "Invalid operation selected."
 
 # Data Source Selection
 if st.session_state.data_source is None:
@@ -359,6 +317,9 @@ elif st.session_state.data_source == "Upload File":
         # Display the first few rows
         st.subheader("Data Preview")
         st.dataframe(st.session_state.data.head())
+        # Generate and display the report
+        report = generate_data_report(st.session_state.data)
+        st.markdown(report)
         # Ask for operations
         st.subheader("What operations do you want to perform?")
         operations = st.selectbox("Suggested operation:", ["None", "Clean Data", "Visualize Data", "Detailed Analysis", "Web Research", "Ask a specific question"])

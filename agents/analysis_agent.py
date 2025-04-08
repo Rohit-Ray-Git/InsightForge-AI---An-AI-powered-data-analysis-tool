@@ -1,6 +1,7 @@
 # agents/analysis_agent.py
 import pandas as pd
-from models.llm_handler import LLMHandler
+from langchain_google_genai import ChatGoogleGenerativeAI
+import os
 
 class AnalysisAgent:
     """
@@ -14,7 +15,7 @@ class AnalysisAgent:
             data (pd.DataFrame): Input data for analysis.
         """
         self.data = data
-        self.llm = LLMHandler()
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=os.getenv("GOOGLE_API_KEY"), client=None) # Added client=None
 
     def perform_eda(self):
         """
@@ -51,7 +52,7 @@ class AnalysisAgent:
             f"Missing Values: {eda_results['stats']['missing_values']}\n"
             f"Correlations:\n{eda_results['correlations']}"
         )
-        return self.llm.get_completion(prompt, max_tokens=1000)
+        return self.llm.invoke(prompt).content
 
     def analyze(self):
         """

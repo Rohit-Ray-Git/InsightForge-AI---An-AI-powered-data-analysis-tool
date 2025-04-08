@@ -1,8 +1,6 @@
 # agents/report_generation_agent.py
 
 import os
-import litellm
-from crewai import Agent, Task, Crew
 from langchain_google_genai import ChatGoogleGenerativeAI
 from agents.content_generation_agent import ContentGenerationAgent
 
@@ -10,34 +8,20 @@ class ReportGenerationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=os.getenv("GOOGLE_API_KEY"), client=None)
         self.content_agent = ContentGenerationAgent()
-        self.agent = Agent(
-            role="Report Writer",
-            goal="Generate a detailed and professional report based on data analysis",
-            backstory="An expert in technical writing and business reporting.",
-            llm=self.llm,
-            tools=[],
-            verbose=True
-        )
 
     def generate_report(self, data, eda_results, insights: str):
-        task = Task(
-            description=f"""Using the following insights, write a clear, structured, and professional report section for a data analysis report:
+        prompt = f"""Generate a clear, structured, and professional report section for a data analysis report based on the following insights:
 
-    {insights}
+Data: {data}
+EDA Results: {eda_results}
+Insights: {insights}
 
-    Make sure the report is suitable for business stakeholders.
-    """,
-            expected_output="A professional report section.",
-            agent=self.agent
-        )
-
-        crew = Crew(
-            agents=[self.agent],
-            tasks=[task],
-            verbose=True
-        )
-
-        result = crew.kickoff()
-        return result
+Make sure the report is suitable for business stakeholders.  Do not reproduce the raw data; synthesize the information into meaningful insights.
+"""
+        try:
+            report = self.llm.invoke(prompt).content
+            return report
+        except Exception as e:
+            return f"Error generating report: {str(e)}"
