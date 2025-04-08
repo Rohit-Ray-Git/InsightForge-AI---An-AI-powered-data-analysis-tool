@@ -7,12 +7,14 @@ import ast
 import numpy as np
 import json
 import logging
+import io
 from agents.database_agent import DatabaseAgent
 from agents.web_scraping_agent import WebScrapingAgent
 from agents.visualization_agent import VisualizationAgent
 from agents.content_generation_agent import ContentGenerationAgent
 from agents.report_generation_agent import ReportGenerationAgent
 from agents.analysis_agent import AnalysisAgent
+from agents.data_cleaning_agent import DataCleaningAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,6 +40,7 @@ web_agent = WebScrapingAgent()
 viz_agent = VisualizationAgent(output_dir="data/reports")
 content_agent = ContentGenerationAgent()
 report_agent = ReportGenerationAgent()
+data_cleaning_agent = DataCleaningAgent()
 
 # Create directories
 os.makedirs("data/uploads", exist_ok=True)
@@ -112,7 +115,7 @@ def generate_data_report(data):
     if categorical_insights:
         categorical_text = "\n".join(
             [f"**{col} Top Values:**\n" + "\n".join(
-                [f"- {item['value']}: {item['count']}" for item in insights['top_values']]
+                [f"- {item['value']}: {item['count']}" for item in categorical_insights[col]['top_values']] # Corrected this line
             )
              for col, insights in categorical_insights.items()]
         )
@@ -141,12 +144,15 @@ def perform_operation(operation, data, table_name, schema_info):
     if operation == "None":
         return "No operation selected."
     elif operation == "Clean Data":
-        if data is None:
-            return "No data available for cleaning."  # Handle the None case
-        cleaning_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string()}, and the schema: {schema_info}, what data cleaning steps would you recommend? Provide a detailed plan.")
-        cleaning_result = content_agent.generate(f"Based on the cleaning plan: {cleaning_plan}, clean the following data: {data.to_string()}. Provide the cleaned data and a summary of the changes made.")
-        return f"**Data Cleaning Plan:**\n{cleaning_plan}\n\n**Cleaning Result:**\n{cleaning_result}"
+        if data is None or data.empty:
+            return "No data available for cleaning."
+        cleaned_data, cleaning_steps = data_cleaning_agent.clean_data(data)
+        if cleaned_data is None:
+            return cleaning_steps  # Return the error message if cleaning failed.
+        return f"**Cleaning Steps:**\n{cleaning_steps}\n\n**Cleaned Data:**\n{cleaned_data.to_string()}"
     elif operation == "Visualize Data":
+        if data is None or data.empty:
+            return "No data available for visualization."
         visualization_results = viz_agent.generate_all(data)
         result_string = ""
         for plot_type, image_path in visualization_results.items():
@@ -157,19 +163,23 @@ def perform_operation(operation, data, table_name, schema_info):
                 result_string += image_path + "\n"
         return result_string
     elif operation == "Detailed Analysis":
-        analysis_agent = AnalysisAgent(data)  # Pass the correct data here
-        data_for_report = data.to_string() # Pass the correct data here
+        if data is None or data.empty:
+            return "No data available for detailed analysis."
+        analysis_agent = AnalysisAgent(data)
+        data_for_report = data.to_string()
         eda_results, insight = analysis_agent.analyze()
         report = report_agent.generate_report(data_for_report, eda_results, insight)
         return f"**Detailed Analysis Report:**\n{report}"
     elif operation == "Web Research":
-        # Placeholder for web research logic
-        research_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of web research would be most insightful? Provide a detailed plan.")
+        if data is None:
+            return "No data available for web research."
+        research_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string()}, what type of web research would be most insightful? Provide a detailed plan.")
         research_result = content_agent.generate(f"Based on the research plan: {research_plan}, generate the research. Provide the research and a summary of the changes made.")
         return f"**Research Plan:**\n{research_plan}\n\n**Research Result:**\n{research_result}"
     elif operation == "Ask a specific question":
-        # Placeholder for asking a specific question logic
-        question_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of question would be most insightful? Provide a detailed plan.")
+        if data is None:
+            return "No data available to ask a specific question."
+        question_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string()}, what type of question would be most insightful? Provide a detailed plan.")
         question_result = content_agent.generate(f"Based on the question plan: {question_plan}, generate the question. Provide the question and a summary of the changes made.")
         return f"**Question Plan:**\n{question_plan}\n\n**Question Result:**\n{question_result}"
     else:
