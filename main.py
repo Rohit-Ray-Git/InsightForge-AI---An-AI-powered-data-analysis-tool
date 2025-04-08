@@ -29,6 +29,8 @@ if 'data_source' not in st.session_state:
     st.session_state.data_source = None
 if 'selected_table' not in st.session_state:
     st.session_state.selected_table = None
+if 'operation_result' not in st.session_state:
+    st.session_state.operation_result = None
 
 # Initialize agents
 db_agent = DatabaseAgent()
@@ -335,10 +337,13 @@ elif st.session_state.data_source == "Database":
             st.session_state.chat_history.append({"role": "assistant", "content": f"Selected operation: {operations}"})
             if operations != "None":
                 schema_info = db_agent.db.get_table_info()
-                operation_result = perform_operation(operations, None, st.session_state.selected_table, schema_info)
-                st.markdown(operation_result)
+                st.session_state.operation_result = perform_operation(operations, None, st.session_state.selected_table, schema_info)
+                st.rerun()
             st.session_state.data = None
-            st.rerun()
+            
+        if st.session_state.operation_result:
+            st.markdown(st.session_state.operation_result)
+            st.session_state.operation_result = None
 
 # File Upload Flow
 elif st.session_state.data_source == "Upload File":
@@ -361,9 +366,11 @@ elif st.session_state.data_source == "Upload File":
             st.session_state.chat_history.append({"role": "assistant", "content": f"Selected operation: {operations}"})
             if operations != "None":
                 schema_info = {}  # No schema for uploaded files
-                operation_result = perform_operation(operations, st.session_state.data, None, schema_info)
-                st.markdown(operation_result)
-            st.rerun()
+                st.session_state.operation_result = perform_operation(operations, st.session_state.data, None, schema_info)
+                st.rerun()
+        if st.session_state.operation_result:
+            st.markdown(st.session_state.operation_result)
+            st.session_state.operation_result = None
 
 # Chat interface (only if data is loaded or table is selected)
 if st.session_state.data is not None or st.session_state.selected_table is not None:
