@@ -141,34 +141,24 @@ def perform_operation(operation, data, table_name, schema_info):
     if operation == "None":
         return "No operation selected."
     elif operation == "Clean Data":
-        # Placeholder for data cleaning logic
-        cleaning_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what data cleaning steps would you recommend? Provide a detailed plan.")
-        # Enclose table name in backticks
-        if table_name:
-            sample_query = f"SELECT * FROM `{table_name}` LIMIT 5"
-            sample_result = db_agent.query(sample_query)
-            try:
-                sample_data = ast.literal_eval(sample_result) if isinstance(sample_result, str) else sample_result
-            except (ValueError, SyntaxError):
-                sample_data = eval(sample_result) if isinstance(sample_result, str) else sample_result
-            sample_text = str(sample_data) if sample_data else "no sample data available"
-        else:
-            sample_text = data.head().to_string() if data is not None else "No data available"
-        cleaning_result = content_agent.generate(f"Based on the cleaning plan: {cleaning_plan}, clean the following data: {sample_text}. Provide the cleaned data and a summary of the changes made.")
+        if data is None:
+            return "No data available for cleaning."  # Handle the None case
+        cleaning_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string()}, and the schema: {schema_info}, what data cleaning steps would you recommend? Provide a detailed plan.")
+        cleaning_result = content_agent.generate(f"Based on the cleaning plan: {cleaning_plan}, clean the following data: {data.to_string()}. Provide the cleaned data and a summary of the changes made.")
         return f"**Data Cleaning Plan:**\n{cleaning_plan}\n\n**Cleaning Result:**\n{cleaning_result}"
     elif operation == "Visualize Data":
-        # Placeholder for data visualization logic
-        visualization_plan = content_agent.generate(f"Given the following data sample: {data.head().to_string() if data is not None else 'No data available'}, and the schema: {schema_info}, what type of visualization would be most insightful? Provide a detailed plan.")
-        visualization_result = content_agent.generate(f"Based on the visualization plan: {visualization_plan}, generate the visualization. Provide the visualization and a summary of the changes made.")
-        return f"**Visualization Plan:**\n{visualization_plan}\n\n**Visualization Result:**\n{visualization_result}"
+        visualization_results = viz_agent.generate_all(data)
+        result_string = ""
+        for plot_type, image_path in visualization_results.items():
+            result_string += f"**{plot_type.replace('_', ' ').title()}**\n"
+            if not image_path.startswith("No"):
+                st.image(image_path, caption=f"{plot_type.replace('_', ' ').title()} of the selected data", use_column_width=True)
+            else:
+                result_string += image_path + "\n"
+        return result_string
     elif operation == "Detailed Analysis":
-        # Placeholder for detailed analysis logic
-        if table_name:
-            analysis_agent = AnalysisAgent(pd.DataFrame(ast.literal_eval(db_agent.query(f"SELECT * FROM `{table_name}`"))))
-            data_for_report = db_agent.query(f"SELECT * FROM `{table_name}`")
-        else:
-            analysis_agent = AnalysisAgent(data)
-            data_for_report = data.to_string()
+        analysis_agent = AnalysisAgent(data)  # Pass the correct data here
+        data_for_report = data.to_string() # Pass the correct data here
         eda_results, insight = analysis_agent.analyze()
         report = report_agent.generate_report(data_for_report, eda_results, insight)
         return f"**Detailed Analysis Report:**\n{report}"

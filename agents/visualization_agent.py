@@ -5,22 +5,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-from crewai import Agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 class VisualizationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"))
-        self.agent = Agent(
-            role="Data Visualizer",
-            goal="Generate insightful visualizations from data",
-            backstory="Expert in creating clear, impactful charts from any dataset.",
-            llm=self.llm,
-            tools=[],
-            verbose=True
-        )
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=os.getenv("GOOGLE_API_KEY"), client=None)
 
     def _select_columns(self, data: pd.DataFrame, x_col: str = None, y_col: str = None, hue_col: str = None, hist_col: str = None) -> tuple:
         """Dynamically select columns for visualization, with optional user-specified columns."""
