@@ -7,7 +7,7 @@ load_dotenv()
 
 class ContentGenerationAgent:
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"), convert_system_message_to_human=True, api_version="v1")
 
     def generate(self, prompt: str) -> str:
         """
@@ -26,7 +26,7 @@ class ContentGenerationAgent:
                 "Ensure your response strictly follows this format:\n"
                 "Category: [category]\n"
                 "Plan: [your plan]\n"
-                "For the Category, use one of: 'Database query', 'Visualization request', 'Web research' (without numbering).\n"
+                "For the Category, use one of: 'Database query', 'Visualization request', 'Web research', 'Detailed Analysis' (without numbering).\n"
                 "For the Plan:\n"
                 "- If Database query, use:\n"
                 "  - For table listing: SQL Query: SHOW TABLES\n"
@@ -37,6 +37,7 @@ class ContentGenerationAgent:
                 "  - For other data queries: SQL Query: [your query]\n"
                 "- If Visualization request, use: Plot Type: [type]\nX Column: [x_col]\nY Column: [y_col]\nHistogram Column: [hist_col]\n"
                 "- If Web research, use: Topic: [topic]\n"
+                "- If Detailed Analysis, use: Detailed Analysis: True\nTable Name: [table_name]\n"
                 "Do not add extra text before or after this format. Replace [table_name] and [numeric_column] with appropriate values based on the schema."
             )
             response = self.llm.invoke(full_prompt).content

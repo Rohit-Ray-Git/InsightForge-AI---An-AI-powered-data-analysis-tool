@@ -10,7 +10,7 @@ class ReportGenerationAgent:
     def __init__(self, output_dir: str = "data/reports"):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
-        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"))
         self.content_agent = ContentGenerationAgent()
         self.agent = Agent(
             role="Report Writer",

@@ -34,8 +34,10 @@ class DatabaseAgent:
             raise ConnectionError(f"Failed to connect to MySQL: {e}") from e
 
         self.llm = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-pro"),  # Use env variable for model
-            api_key=os.getenv("GOOGLE_API_KEY")
+            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),  # Use env variable for model
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            convert_system_message_to_human=True,
+            api_version="v1"
         )
         self.schema_cache = None  # Initialize schema cache
 
@@ -78,7 +80,7 @@ class DatabaseAgent:
                 cursor.execute("SHOW TABLES")
                 tables = [table[0] for table in cursor.fetchall()]
                 for table_name in tables:
-                    cursor.execute(f"DESCRIBE {table_name}")
+                    cursor.execute(f"DESCRIBE `{table_name}`") # Enclose table name in backticks
                     columns = {}
                     for row in cursor.fetchall():
                         col_name, col_type, _, _, _, _ = row
@@ -90,6 +92,7 @@ class DatabaseAgent:
             except pymysql.Error as e:
                 logging.error(f"Error fetching detailed table info: {e}")
                 return {}
+
 
     def __del__(self):
         """Ensure the raw database connection is closed."""

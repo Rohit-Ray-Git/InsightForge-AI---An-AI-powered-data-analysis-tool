@@ -28,7 +28,7 @@ class SerpSearchTool(BaseTool):
 
 class WebScrapingAgent:
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=os.getenv("GOOGLE_API_KEY"))
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"), convert_system_message_to_human=True, api_version="v1")
         
         # Instantiate the custom tool
         serp_tool = SerpSearchTool()
