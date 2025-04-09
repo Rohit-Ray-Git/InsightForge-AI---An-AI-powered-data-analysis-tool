@@ -823,7 +823,7 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
 
 
                 # --- LLM Planning Prompt ---
-                # MODIFIED: Added guidance for distribution plots
+                # MODIFIED: Added guidance for data types
                 planning_prompt = f"""
                 Analyze the user's request: '{prompt}'
 
@@ -847,6 +847,8 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
 
                 - If Data Analysis (File/Table): (Requires loaded data: {'Yes' if current_data is not None else 'No'})
                     - If asking for column names or list of columns: Plan: Analysis Type: List Columns
+                    - **Guidance:** If asking "what are the column data types" or "list data types": Plan: Analysis Type: List Column Types
+                    - **Guidance:** If asking "which columns are integer/float/object/category/datetime": Plan: Analysis Type: List Columns by Type\nDetails: [Specify type, e.g., 'integer']
                     - If asking for missing values: Plan: Analysis Type: Missing Values
                     - If asking for summary statistics (describe, info): Plan: Analysis Type: Summary Stats
                     - If asking for counts/averages/sums/min/max/unique counts for specific columns/conditions (e.g., 'average rating', 'count where country is US', 'number of unique products'): Plan: Analysis Type: Aggregation\nDetails: [Describe the aggregation needed, e.g., 'Average of product_star_rating where country == "US"', 'Count unique values in product_name']
@@ -927,6 +929,56 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                             else:
                                                 response_text = "No data loaded to list columns from."
 
+                                        # --- NEW: List Column Types Handler ---
+                                        elif analysis_type == "List Column Types":
+                                            if current_data is not None:
+                                                dtypes_series = current_data.dtypes
+                                                response_lines = ["**Column Data Types:**"]
+                                                for col_name, dtype in dtypes_series.items():
+                                                    response_lines.append(f"- `{col_name}`: {dtype}")
+                                                response_text = "\n".join(response_lines)
+                                            else:
+                                                response_text = "No data loaded to list column types from."
+
+                                        # --- NEW: List Columns by Type Handler ---
+                                        elif analysis_type == "List Columns by Type":
+                                            details_match = re.search(r"Details:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
+                                            requested_type_str = details_match.group(1).strip().lower() if details_match else None
+
+                                            if requested_type_str and current_data is not None:
+                                                matching_columns = []
+                                                for col in current_data.columns:
+                                                    dtype = current_data[col].dtype
+                                                    is_match = False
+                                                    if requested_type_str in ['integer', 'int', 'int64']:
+                                                        is_match = pd.api.types.is_integer_dtype(dtype)
+                                                    elif requested_type_str in ['float', 'floating', 'float64', 'number', 'numeric']:
+                                                        # Include integers as numeric if requested broadly
+                                                        is_match = pd.api.types.is_numeric_dtype(dtype) and not pd.api.types.is_integer_dtype(dtype) # Default to float
+                                                        if requested_type_str in ['number', 'numeric']:
+                                                            is_match = pd.api.types.is_numeric_dtype(dtype) # Broad numeric match
+                                                    elif requested_type_str in ['object', 'string', 'text', 'str']:
+                                                        is_match = pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype)
+                                                    elif requested_type_str in ['category', 'categorical']:
+                                                        is_match = pd.api.types.is_categorical_dtype(dtype)
+                                                    elif requested_type_str in ['datetime', 'date', 'time', 'timestamp']:
+                                                        is_match = pd.api.types.is_datetime64_any_dtype(dtype) or pd.api.types.is_timedelta64_dtype(dtype)
+                                                    elif requested_type_str == 'boolean' or requested_type_str == 'bool':
+                                                         is_match = pd.api.types.is_bool_dtype(dtype)
+
+                                                    if is_match:
+                                                        matching_columns.append(f"`{col}` ({dtype})")
+
+                                                if matching_columns:
+                                                    response_text = f"Columns with data type **{requested_type_str}**:\n- " + "\n- ".join(matching_columns)
+                                                else:
+                                                    response_text = f"No columns found with data type matching '{requested_type_str}'."
+                                            elif not requested_type_str:
+                                                 response_text = "Please specify the data type you want to list columns for (e.g., 'list integer columns')."
+                                            else: # current_data is None
+                                                response_text = "No data loaded to list columns from."
+
+
                                         elif analysis_type == "Missing Values":
                                             missing_counts = current_data.isnull().sum()
                                             missing_filtered = missing_counts[missing_counts > 0]
@@ -938,8 +990,11 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                             buffer = io.StringIO()
                                             current_data.info(buf=buffer)
                                             info_str = buffer.getvalue()
+                                            # Include dtypes string directly for clarity if just asking for types
+                                            dtypes_str = current_data.dtypes.to_string()
                                             desc_str = current_data.describe(include='all').to_string()
-                                            response_text = f"**Data Info:**\n```\n{info_str}\n```\n\n**Summary Statistics:**\n```\n{desc_str}\n```"
+                                            response_text = f"**Data Info (includes types and non-null counts):**\n```\n{info_str}\n```\n\n**Column Data Types:**\n```\n{dtypes_str}\n```\n\n**Summary Statistics:**\n```\n{desc_str}\n```"
+
                                         elif analysis_type == "Correlation":
                                             numeric_df = current_data.select_dtypes(include=np.number)
                                             if numeric_df.shape[1] < 2:
