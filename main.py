@@ -1,3 +1,4 @@
+# e:\Resume Projects\InsightForge AI - An AI powered data analysis tool\main.py
 import streamlit as st
 import pandas as pd
 import os
@@ -41,11 +42,14 @@ if 'schema_info' not in st.session_state:
 try:
     db_agent = DatabaseAgent()
     # Try a simple query to check connection
+    # Use a query that doesn't rely on specific table existence initially
     db_agent.query("SELECT 1")
     st.session_state.db_connected = True
 except Exception as e:
     st.error(f"Failed to connect to the database: {e}")
-    st.stop() # Stop execution if DB connection fails
+    # Allow app to continue but database features will be limited
+    st.session_state.db_connected = False
+    # st.stop() # Optional: Stop execution if DB connection is critical
 
 web_agent = WebScrapingAgent()
 viz_agent = VisualizationAgent(output_dir="data/reports")
@@ -66,70 +70,118 @@ def safe_literal_eval(val):
     if not isinstance(val, str):
         return val
     try:
+        # Basic check for potentially harmful patterns before eval
+        if re.search(r"(__|os\.|sys\.|subprocess\.|eval\(|exec\()", val):
+            logging.warning(f"Potentially unsafe pattern detected in literal_eval input: {val[:100]}")
+            return val # Return original string if potentially unsafe
         return ast.literal_eval(val)
-    except (ValueError, SyntaxError, MemoryError):
+    except (ValueError, SyntaxError, MemoryError, TypeError) as e:
         # If literal_eval fails, return the original string or handle appropriately
-        # For large data strings, literal_eval might fail. Consider alternatives if needed.
-        logging.warning(f"ast.literal_eval failed for value starting with: {val[:100]}")
+        logging.warning(f"ast.literal_eval failed for value starting with: {val[:100]}. Error: {e}")
         return val # Or potentially raise an error or return None
 
 def get_db_data(table_name):
     """Fetches data and column names for a given table."""
+    if not st.session_state.db_connected:
+         return None, "Database connection is not available."
     if not table_name:
         return None, "No table name provided."
     try:
         # Enclose table name in backticks for safety
         safe_table_name = f"`{table_name}`"
 
-        # Get column names
+        # Get column names using DESCRIBE
         column_info_raw = db_agent.query(f"DESCRIBE {safe_table_name}")
         column_info = safe_literal_eval(column_info_raw)
-        if not isinstance(column_info, list) or not all(isinstance(item, tuple) for item in column_info):
-             raise ValueError(f"Unexpected format for DESCRIBE result: {column_info_raw}")
-        columns = [col[0] for col in column_info]
 
-        # Get data
+        # Validate DESCRIBE result format
+        if not isinstance(column_info, list) or not all(isinstance(item, tuple) and len(item) >= 2 for item in column_info):
+             # Attempt to handle potential string formatting issues from SQLDatabase.run
+             if isinstance(column_info_raw, str) and '\n' in column_info_raw:
+                 # Try parsing a simple string table format
+                 lines = column_info_raw.strip().split('\n')
+                 if len(lines) > 1:
+                     # Assuming first line might be headers, rest are data
+                     # This is a heuristic and might need adjustment based on actual output
+                     columns = [h.strip() for h in lines[0].split('\t')] # Example split
+                     if 'Field' in columns:
+                         field_index = columns.index('Field')
+                         parsed_columns = [line.split('\t')[field_index].strip() for line in lines[1:] if line.strip()]
+                         if parsed_columns:
+                             columns = parsed_columns # Use extracted column names
+                             logging.info(f"Parsed column names from string: {columns}")
+                         else:
+                              raise ValueError(f"Could not extract column names from DESCRIBE string result: {column_info_raw}")
+                     else:
+                         raise ValueError(f"Unexpected format for DESCRIBE string result (missing 'Field'): {column_info_raw}")
+                 else:
+                     raise ValueError(f"Unexpected format for DESCRIBE result (string): {column_info_raw}")
+             else:
+                 raise ValueError(f"Unexpected format for DESCRIBE result (list/tuple): {column_info_raw}")
+        else:
+             columns = [col[0] for col in column_info] # Standard case
+
+        # Get data using SELECT *
         data_raw = db_agent.query(f"SELECT * FROM {safe_table_name}")
         data_list = safe_literal_eval(data_raw)
+
+        # Validate SELECT * result format
         if not isinstance(data_list, list):
-             raise ValueError(f"Unexpected format for SELECT * result: {data_raw}")
+             # Handle potential string formatting issues
+             if isinstance(data_raw, str) and '\n' in data_raw:
+                 lines = data_raw.strip().split('\n')
+                 # Simple parsing assuming tab-separated or similar, needs refinement
+                 parsed_data = [tuple(line.split('\t')) for line in lines]
+                 if parsed_data and len(parsed_data[0]) == len(columns):
+                     data_list = parsed_data
+                     logging.info(f"Parsed data from string result.")
+                 else:
+                     raise ValueError(f"Unexpected format or column mismatch for SELECT * string result: {data_raw}")
+             else:
+                 raise ValueError(f"Unexpected format for SELECT * result: {data_raw}")
 
         # Create DataFrame
         df = pd.DataFrame(data_list, columns=columns)
+        # Attempt type conversion (best effort)
+        df = df.infer_objects()
+        for col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+            except Exception:
+                pass # Ignore if conversion fails
         return df, None
+
     except Exception as e:
-        logging.error(f"Error fetching data for table {table_name}: {e}")
+        logging.error(f"Error fetching data for table {table_name}: {e}", exc_info=True)
         return None, f"Error fetching data for table {table_name}: {e}"
 
 def compute_statistics(data):
     """Compute statistical summary for numeric columns in the DataFrame."""
     if data is None or data.empty:
         return {}
+    # Ensure data types are appropriate before selecting numeric
     numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
     if not numeric_cols:
         return {}
 
     stats = {}
     for col in numeric_cols:
-        col_data = data[col].dropna()
+        col_data = pd.to_numeric(data[col], errors='coerce').dropna() # Ensure numeric conversion and drop NaNs introduced
         if len(col_data) > 0:
-            # Convert Decimal to float for consistency if necessary
             stats[col] = {
                 "count": int(col_data.count()),
-                "mean": float(col_data.mean()) if isinstance(col_data.mean(), Decimal) else col_data.mean(),
-                "median": float(col_data.median()) if isinstance(col_data.median(), Decimal) else col_data.median(),
-                "std": float(col_data.std()) if isinstance(col_data.std(), Decimal) else col_data.std(),
-                "min": float(col_data.min()) if isinstance(col_data.min(), Decimal) else col_data.min(),
-                "max": float(col_data.max()) if isinstance(col_data.max(), Decimal) else col_data.max(),
-                "q1": float(col_data.quantile(0.25)) if isinstance(col_data.quantile(0.25), Decimal) else col_data.quantile(0.25),
-                "q3": float(col_data.quantile(0.75)) if isinstance(col_data.quantile(0.75), Decimal) else col_data.quantile(0.75)
+                "mean": float(col_data.mean()) if pd.notna(col_data.mean()) else None,
+                "median": float(col_data.median()) if pd.notna(col_data.median()) else None,
+                "std": float(col_data.std()) if pd.notna(col_data.std()) else None,
+                "min": float(col_data.min()) if pd.notna(col_data.min()) else None,
+                "max": float(col_data.max()) if pd.notna(col_data.max()) else None,
+                "q1": float(col_data.quantile(0.25)) if pd.notna(col_data.quantile(0.25)) else None,
+                "q3": float(col_data.quantile(0.75)) if pd.notna(col_data.quantile(0.75)) else None
             }
-            # Handle potential NaN/Inf values after calculation
+            # Round floats for display
             for key, value in stats[col].items():
-                if pd.isna(value) or np.isinf(value):
-                    stats[col][key] = None # Or use a placeholder like "N/A"
-                elif isinstance(value, float):
-                     stats[col][key] = round(value, 4) # Round floats for display
+                if isinstance(value, float):
+                     stats[col][key] = round(value, 4)
 
     return stats
 
@@ -143,16 +195,25 @@ def analyze_categorical_columns(data):
 
     categorical_insights = {}
     for col in categorical_cols:
-        # Limit the number of unique values displayed for performance
-        if data[col].nunique() > 100:
-             top_values = data[col].value_counts().head(10).to_dict()
+        # Handle potential non-hashable types by converting to string first
+        try:
+            col_data_str = data[col].astype(str)
+            unique_count = col_data_str.nunique()
+            value_counts_series = col_data_str.value_counts()
+        except TypeError as e:
+            logging.warning(f"Could not analyze categorical column '{col}' due to non-hashable types: {e}")
+            continue # Skip this column
+
+        if unique_count > 100:
+             top_values = value_counts_series.head(10).to_dict()
              note = " (Top 10 shown due to high cardinality)"
         else:
-             top_values = data[col].value_counts().head(10).to_dict() # Show top 10 max
+             top_values = value_counts_series.head(10).to_dict() # Show top 10 max
              note = ""
 
         categorical_insights[col] = {
-            "top_values": [{"value": str(value), "count": count} for value, count in top_values.items()], # Ensure value is string
+            # Ensure value is string for JSON compatibility if needed later
+            "top_values": [{"value": str(value), "count": int(count)} for value, count in top_values.items()],
             "note": note
         }
     return categorical_insights
@@ -179,9 +240,8 @@ def generate_data_report(data):
                  stat_lines.append(f"- {key.capitalize()}: {value if value is not None else 'N/A'}")
             stats_text_parts.append("\n".join(stat_lines))
         stats_text = "\n\n".join(stats_text_parts)
-
     else:
-        stats_text = "No numeric columns found for statistical analysis."
+        stats_text = "No numeric columns found or suitable for statistical analysis."
 
     # Format categorical insights
     categorical_text = ""
@@ -189,11 +249,12 @@ def generate_data_report(data):
         cat_text_parts = []
         for col, insights in categorical_insights.items():
              lines = [f"**{col} Top Values{insights.get('note', '')}:**"]
+             # Safely format values that might be complex types
              lines.extend([f"- {item['value']}: {item['count']}" for item in insights['top_values']])
              cat_text_parts.append("\n".join(lines))
         categorical_text = "\n\n".join(cat_text_parts)
     else:
-        categorical_text = "No categorical columns found for analysis."
+        categorical_text = "No categorical columns found or suitable for analysis."
 
     # Generate insight with LLM
     insight_prompt = (
@@ -201,14 +262,15 @@ def generate_data_report(data):
         f"**Numeric Statistics:**\n{stats_text}\n\n"
         f"**Categorical Insights:**\n{categorical_text}\n\n"
         f"**Sample Data (first 5 rows):**\n{sample_data}\n\n"
-        f"Provide a concise report (2-3 paragraphs) summarizing the key findings. "
-        f"Focus on potential patterns, data quality observations (like skewness, presence of outliers suggested by min/max/std dev, dominant categories), and possible implications. "
-        f"Synthesize the information into actionable insights rather than just listing the stats."
+        f"Provide a concise report (2-3 paragraphs) summarizing the key findings for a business user. "
+        f"Focus on potential patterns, data quality observations (like skewness suggested by mean vs median, presence of outliers suggested by min/max/std dev, dominant categories, missing data implications), and possible business implications. "
+        f"Synthesize the information into actionable insights rather than just listing the stats. Avoid technical jargon where possible."
     )
     try:
         insight = content_agent.generate(insight_prompt)
     except Exception as e:
         insight = f"Could not generate LLM insight: {e}"
+        logging.error(f"LLM Insight Generation Error: {e}", exc_info=True)
 
 
     return f"### Data Analysis Report\n\n" \
@@ -233,6 +295,8 @@ def perform_operation(operation, data, table_name=None):
                 return f"Error fetching data for operation: {error_msg}"
             if data is None or data.empty:
                  return f"No data found in table '{table_name}' for operation."
+            # Store fetched data in session state if fetched successfully here
+            st.session_state.data = data
         else:
              # No data and no table name
              return "No data available for this operation. Please upload a file or select a database table first."
@@ -240,52 +304,85 @@ def perform_operation(operation, data, table_name=None):
     # --- Perform the actual operation ---
     try:
         if operation == "Clean Data":
-            cleaned_data, cleaning_steps = data_cleaning_agent.clean_data(data)
+            # Expect three return values now: cleaned_df, tech_log, layman_log
+            cleaned_data, tech_steps, layman_steps = data_cleaning_agent.clean_data(data)
+
             if cleaned_data is None:
-                return f"Data cleaning failed: {cleaning_steps}" # Return the error message if cleaning failed.
-            # Display summary and maybe head of cleaned data
-            st.session_state.data = cleaned_data # Update session state with cleaned data
+                # If cleaning failed catastrophically, tech_steps might contain the error
+                return f"Data cleaning failed: {tech_steps}" # tech_steps holds error message here
+
+            # Update session state with the cleaned data ONLY if successful
+            st.session_state.data = cleaned_data
             st.success("Data cleaning applied successfully!")
-            return f"**Cleaning Steps Performed:**\n```\n{cleaning_steps}\n```\n\n**Preview of Cleaned Data:**\n{cleaned_data.head().to_string()}"
+
+            # Format the output to show both explanations
+            return (
+                f"**Cleaning Steps Performed (Technical Details):**\n"
+                f"```\n{tech_steps}\n```\n\n"
+                f"**Explanation (What We Did):**\n"
+                f"{layman_steps}\n\n"
+                f"**Preview of Cleaned Data:**\n"
+                f"{cleaned_data.head().to_string()}"
+            )
 
         elif operation == "Visualize Data":
             visualization_results = viz_agent.generate_all(data) # Generate all standard plots
             result_string = "**Generated Visualizations:**\n"
+            images_generated = False
             if not visualization_results:
                 result_string += "Could not generate any visualizations for this data."
             else:
                 for plot_type, image_path in visualization_results.items():
                     title = plot_type.replace('_', ' ').title()
-                    if image_path and not image_path.startswith("No"):
-                        st.image(image_path, caption=f"{title}", use_column_width=True)
-                    else:
-                        result_string += f"- {title}: {image_path}\n" # Report if a plot failed
-            return result_string if len(visualization_results) == 0 else "" # Return string only if no images shown
+                    # Check if image_path is valid and points to an existing file
+                    if image_path and not image_path.startswith("No") and os.path.exists(image_path):
+                        try:
+                            st.image(image_path, caption=f"{title}", use_column_width=True)
+                            images_generated = True
+                        except Exception as img_e:
+                             result_string += f"- {title}: Error displaying image {image_path}: {img_e}\n"
+                             logging.error(f"Error displaying image {image_path}: {img_e}", exc_info=True)
+                    elif image_path: # Handle "No numeric columns..." messages etc.
+                        result_string += f"- {title}: {image_path}\n"
+                    else: # Handle case where path is None or empty
+                         result_string += f"- {title}: Failed to generate (no path returned).\n"
+
+            # Return the text summary only if no images were successfully displayed
+            return result_string if not images_generated else ""
 
         elif operation == "Detailed Analysis":
+            # Ensure data is a DataFrame before passing to AnalysisAgent
+            if not isinstance(data, pd.DataFrame):
+                 return f"Error: Data for detailed analysis is not in the expected format (DataFrame)."
+
             analysis_agent = AnalysisAgent(data) # Pass the DataFrame
             buffer = io.StringIO()
-            data.info(buf=buffer)
-            data_info = buffer.getvalue()
+            try:
+                data.info(buf=buffer)
+                data_info = buffer.getvalue()
+            except Exception as info_e:
+                data_info = f"Could not get data info: {info_e}"
+
             data_head = data.head().to_string()
-            data_for_report = f"Data Info:\n{data_info}\n\nData Head:\n{data_head}"
+            # Limit data passed to report agent if it's very large
+            data_summary_for_report = f"Data Info:\n{data_info}\n\nData Head:\n{data_head}"
 
             eda_results, insight = analysis_agent.analyze() # Analyze the DataFrame
-            report = report_agent.generate_report(data_for_report, eda_results, insight)
+            # Pass limited summary instead of full data to report agent
+            report = report_agent.generate_report(data_summary_for_report, eda_results, insight)
             return f"**Detailed Analysis Report:**\n{report}"
 
         elif operation == "Web Research":
             # Generate a query based on data context
-            research_topic_prompt = f"Based on the columns {data.columns.tolist()} and this data sample:\n{data.head().to_string()}\nSuggest a relevant web research topic (e.g., market trends for a product, competitor analysis based on categories)."
+            research_topic_prompt = f"Based on the columns {data.columns.tolist()} and this data sample:\n{data.head().to_string()}\nSuggest a relevant web research topic (e.g., market trends for a product, competitor analysis based on categories, definitions of industry terms)."
             research_topic = content_agent.generate(research_topic_prompt)
             st.info(f"Suggested Research Topic: {research_topic}")
             research_result = web_agent.research(research_topic)
             return f"**Web Research on '{research_topic}':**\n{research_result}"
 
         elif operation == "Ask a specific question":
-            # This operation might be better handled by the chat interface directly.
-            # Here, we can maybe generate a sample insightful question.
-            question_prompt = f"Based on the columns {data.columns.tolist()} and this data sample:\n{data.head().to_string()}\nSuggest an insightful question that can be answered from this data (e.g., 'What is the average value of X for category Y?', 'Are there outliers in column Z?')."
+            # This operation is better handled by the chat interface directly.
+            question_prompt = f"Based on the columns {data.columns.tolist()} and this data sample:\n{data.head().to_string()}\nSuggest an insightful question that can be answered from this data (e.g., 'What is the average value of X for category Y?', 'Are there outliers in column Z?', 'Which category has the highest average rating?')."
             suggested_question = content_agent.generate(question_prompt)
             return f"**Suggestion:** Try asking a specific question in the chat below, for example: '{suggested_question}'"
 
@@ -294,6 +391,7 @@ def perform_operation(operation, data, table_name=None):
 
     except Exception as e:
         logging.error(f"Error during operation '{operation}': {e}", exc_info=True)
+        st.error(f"An error occurred while performing '{operation}': {e}") # Show error in UI
         return f"An error occurred while performing '{operation}': {e}"
 
 
@@ -304,8 +402,10 @@ def format_database_response(raw_result, question, schema_info):
 
     if raw_result is None:
         return "Query executed, but returned no result."
-    if isinstance(raw_result, str) and raw_result.startswith("Error"):
-        return raw_result # Return DB errors directly
+    # Handle potential errors returned as strings from db.run
+    if isinstance(raw_result, str) and ("Error" in raw_result or "Traceback" in raw_result):
+        logging.error(f"Database query returned an error: {raw_result}")
+        return f"Database Error: {raw_result}" # Return DB errors directly
 
     try:
         # Attempt to parse the raw result safely
@@ -327,8 +427,8 @@ def format_database_response(raw_result, question, schema_info):
                         return f"The database contains one table: '{items[0]}'."
                     else:
                         table_list = ", ".join(f"'{item}'" for item in items[:-1])
-                        last_table = f"'{items[-1]}'"
-                        return f"The database contains the following tables: {table_list} and {last_table}."
+                        last_table = f"'{items[-1]}'" if items else ""
+                        return f"The database contains the following tables: {table_list}{' and ' + last_table if last_table else ''}."
                 # Handle single count result returned as list of tuple
                 elif len(items) == 1 and isinstance(items[0], (int, float, Decimal)):
                      count_value = float(items[0]) if isinstance(items[0], Decimal) else items[0]
@@ -346,15 +446,22 @@ def format_database_response(raw_result, question, schema_info):
                 try:
                     # Try creating a DataFrame for better display and potential analysis
                     # We need column names - this is tricky without knowing the query
-                    # For simplicity, just display the raw list for now
-                    # A more advanced approach would parse the SQL query for column names
-                    # or pass column names alongside the result.
-                    df_result = pd.DataFrame(cleaned_result) # Let pandas infer headers
+                    # Let pandas infer headers if possible, otherwise display raw
+                    df_result = pd.DataFrame(cleaned_result)
+                    # Try to get headers if they look like they are in the first row
+                    if all(isinstance(h, str) for h in df_result.iloc[0]) and len(cleaned_result) > 1:
+                         potential_headers = df_result.iloc[0]
+                         # Basic check if headers seem reasonable (e.g., not all numbers)
+                         if not all(re.match(r"^-?\d+(\.\d+)?$", str(h)) for h in potential_headers):
+                             df_result.columns = potential_headers
+                             df_result = df_result[1:].reset_index(drop=True)
+
                     st.dataframe(df_result)
-                    return f"Query returned {len(cleaned_result)} row(s). Displaying above."
-                except Exception:
+                    return f"Query returned {len(df_result)} row(s). Displaying above."
+                except Exception as df_e:
+                    logging.warning(f"Could not display DB result as DataFrame: {df_e}. Falling back to string.")
                     # Fallback to string representation if DataFrame fails
-                    return f"Query Result:\n{str(cleaned_result)}"
+                    return f"Query Result (could not format as table):\n```\n{str(cleaned_result)}\n```"
 
 
         # Handle single value result (e.g., COUNT(*)) returned directly as tuple or value
@@ -389,43 +496,94 @@ def format_database_response(raw_result, question, schema_info):
 # Data Source Selection
 if st.session_state.data_source is None:
     st.subheader("1. Select Data Source")
-    data_source = st.radio("Choose your data source:", ["Database", "Upload File"], key="data_source_radio")
-    if st.button("Confirm Data Source"):
-        st.session_state.data_source = data_source
-        st.session_state.selected_table = None # Reset selections when changing source
-        st.session_state.data = None
-        st.session_state.chat_history = []
-        st.session_state.operation_result = None
-        st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📁 Upload File", use_container_width=True):
+            st.session_state.data_source = "Upload File"
+            st.session_state.selected_table = None # Reset selections
+            st.session_state.data = None
+            st.session_state.chat_history = []
+            st.session_state.operation_result = None
+            st.rerun()
+    with col2:
+        # Disable DB button if connection failed
+        db_disabled = not st.session_state.get('db_connected', False)
+        if st.button("🛢️ Connect to Database", use_container_width=True, disabled=db_disabled):
+            st.session_state.data_source = "Database"
+            st.session_state.selected_table = None # Reset selections
+            st.session_state.data = None
+            st.session_state.chat_history = []
+            st.session_state.operation_result = None
+            st.rerun()
+        if db_disabled:
+            st.warning("Database connection failed. Please check configuration and restart.")
+
 
 # Database Flow
 elif st.session_state.data_source == "Database":
     st.subheader("2. Database Interaction")
-    if st.session_state.selected_table is None:
+    if not st.session_state.get('db_connected', False):
+        st.error("Database connection is unavailable. Cannot proceed.")
+    elif st.session_state.selected_table is None:
         st.markdown("Select a table to analyze.")
         try:
             tables_result = db_agent.query("SHOW TABLES")
             tables_list = safe_literal_eval(tables_result)
-            if isinstance(tables_list, list) and all(isinstance(t, tuple) for t in tables_list):
+            if isinstance(tables_list, list) and all(isinstance(t, tuple) and len(t)==1 for t in tables_list):
                 tables = [table[0] for table in tables_list]
                 if not tables:
                     st.warning("No tables found in the database.")
                 else:
-                    selected_table = st.selectbox("Available Tables:", tables, key="db_table_select")
-                    if st.button("Analyze Table"):
+                    selected_table = st.selectbox("Available Tables:", tables, key="db_table_select", index=None, placeholder="Choose a table...")
+                    if selected_table and st.button(f"Analyze Table '{selected_table}'"):
                         st.session_state.selected_table = selected_table
                         st.session_state.data = None # Clear any previous file data
                         st.session_state.chat_history = [] # Reset chat
                         st.session_state.operation_result = None
-                        # Fetch initial data and schema for the selected table
-                        df, error = get_db_data(selected_table)
-                        if error:
-                            st.error(error)
-                            st.session_state.selected_table = None # Reset if fetch fails
-                        else:
-                            st.session_state.data = df # Store fetched data
-                            st.session_state.schema_info = db_agent.db.get_table_info([selected_table]) # Get schema for this table
+                        with st.spinner(f"Fetching data and schema for '{selected_table}'..."):
+                            # Fetch initial data and schema for the selected table
+                            df, error = get_db_data(selected_table)
+                            if error:
+                                st.error(error)
+                                st.session_state.selected_table = None # Reset if fetch fails
+                            else:
+                                st.session_state.data = df # Store fetched data
+                                try:
+                                    # Use the more detailed schema fetching method if available
+                                    if hasattr(db_agent, 'get_detailed_table_info'):
+                                         schema_dict = db_agent.get_detailed_table_info()
+                                         st.session_state.schema_info = schema_dict.get(selected_table, f"Schema for {selected_table} not found.")
+                                    else: # Fallback to langchain's method
+                                         st.session_state.schema_info = db_agent.db.get_table_info([selected_table])
+                                except Exception as schema_e:
+                                     st.warning(f"Could not fetch detailed schema info: {schema_e}")
+                                     st.session_state.schema_info = "Schema information unavailable."
                         st.rerun()
+            # Handle case where SHOW TABLES returns a string or other format
+            elif isinstance(tables_result, str) and tables_result:
+                 # Attempt to parse string list of tables
+                 potential_tables = [line.strip() for line in tables_result.split('\n') if line.strip()]
+                 if potential_tables:
+                      selected_table = st.selectbox("Available Tables (parsed):", potential_tables, key="db_table_select_str", index=None, placeholder="Choose a table...")
+                      if selected_table and st.button(f"Analyze Table '{selected_table}'"):
+                           # ... (same logic as above) ...
+                           st.session_state.selected_table = selected_table
+                           st.session_state.data = None
+                           st.session_state.chat_history = []
+                           st.session_state.operation_result = None
+                           with st.spinner(f"Fetching data and schema for '{selected_table}'..."):
+                               df, error = get_db_data(selected_table)
+                               if error: st.error(error); st.session_state.selected_table = None
+                               else:
+                                   st.session_state.data = df
+                                   try:
+                                       if hasattr(db_agent, 'get_detailed_table_info'):
+                                           schema_dict = db_agent.get_detailed_table_info(); st.session_state.schema_info = schema_dict.get(selected_table, f"Schema for {selected_table} not found.")
+                                       else: st.session_state.schema_info = db_agent.db.get_table_info([selected_table])
+                                   except Exception as schema_e: st.warning(f"Could not fetch schema: {schema_e}"); st.session_state.schema_info = "Schema unavailable."
+                           st.rerun()
+                 else:
+                      st.error(f"Could not parse table list from database response: {tables_result}")
             else:
                 st.error(f"Could not parse table list: {tables_result}")
 
@@ -439,13 +597,21 @@ elif st.session_state.data_source == "Database":
 
         # Display report if data is loaded
         if st.session_state.data is not None and not st.session_state.data.empty:
-            st.dataframe(st.session_state.data.head())
-            report = generate_data_report(st.session_state.data)
-            st.markdown(report)
+            with st.expander("View Data Sample", expanded=False):
+                 st.dataframe(st.session_state.data.head())
+            report_output = generate_data_report(st.session_state.data)
+            st.markdown(report_output)
         elif st.session_state.data is not None and st.session_state.data.empty:
              st.warning(f"Table '{st.session_state.selected_table}' appears to be empty.")
         else:
-             st.warning("Could not load data for the report. Try selecting the table again.")
+             # Attempt to fetch data again if it's missing
+             st.warning("Data not currently loaded. Attempting to fetch...")
+             df, error = get_db_data(st.session_state.selected_table)
+             if error:
+                 st.error(f"Failed to fetch data: {error}")
+             else:
+                 st.session_state.data = df
+                 st.rerun() # Rerun to display the fetched data and report
 
 
         st.subheader("3. Perform Operations (Optional)")
@@ -453,8 +619,7 @@ elif st.session_state.data_source == "Database":
         if st.button("Run Operation"):
             if operations != "None":
                 with st.spinner(f"Running {operations}..."):
-                    # Data should already be in st.session_state.data from the "Analyze Table" step
-                    # Pass the table name for context if needed by the operation
+                    # Data should be in st.session_state.data (either from initial load or re-fetch)
                     result = perform_operation(operations, st.session_state.data, table_name=st.session_state.selected_table)
                     st.session_state.operation_result = result
                     # No rerun here, display result directly below
@@ -467,11 +632,11 @@ elif st.session_state.data_source == "Database":
             st.markdown(f"**Operation Result:**")
             # Use st.write for potentially complex outputs, markdown for text
             if isinstance(st.session_state.operation_result, str):
-                 st.markdown(st.session_state.operation_result)
+                 st.markdown(st.session_state.operation_result, unsafe_allow_html=False) # Avoid unsafe HTML
             else:
                  st.write(st.session_state.operation_result)
-            # Clear the result after displaying
-            # st.session_state.operation_result = None # Keep result until next action
+            # Clear the result after displaying to avoid showing stale results
+            # st.session_state.operation_result = None # Or keep until next action if preferred
 
 
 # File Upload Flow
@@ -479,29 +644,32 @@ elif st.session_state.data_source == "Upload File":
     st.subheader("2. Upload and Analyze File")
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv", key="file_uploader")
     if uploaded_file is not None:
+        # Check if it's a new file or data is not loaded
         if st.session_state.data is None or getattr(st.session_state, 'uploaded_file_name', '') != uploaded_file.name:
              try:
-                 st.session_state.data = pd.read_csv(uploaded_file)
-                 st.session_state.uploaded_file_name = uploaded_file.name
-                 st.session_state.selected_table = None # Clear DB selection
-                 st.session_state.chat_history = [] # Reset chat
-                 st.session_state.operation_result = None
+                 with st.spinner(f"Loading and analyzing '{uploaded_file.name}'..."):
+                     st.session_state.data = pd.read_csv(uploaded_file)
+                     st.session_state.uploaded_file_name = uploaded_file.name
+                     st.session_state.selected_table = None # Clear DB selection
+                     st.session_state.chat_history = [] # Reset chat
+                     st.session_state.operation_result = None
+                     st.session_state.schema_info = None # Clear schema info
                  st.success(f"File '{uploaded_file.name}' uploaded and loaded successfully.")
-                 # Save the uploaded file (optional)
-                 # upload_path = os.path.join("data/uploads", uploaded_file.name)
-                 # with open(upload_path, "wb") as f:
-                 #     f.write(uploaded_file.getbuffer())
 
                  # Automatically display analysis after upload
                  st.markdown("### Initial Data Analysis")
-                 st.dataframe(st.session_state.data.head())
-                 report = generate_data_report(st.session_state.data)
-                 st.markdown(report)
+                 with st.expander("View Data Sample", expanded=False):
+                      st.dataframe(st.session_state.data.head())
+                 report_output = generate_data_report(st.session_state.data)
+                 st.markdown(report_output)
 
              except Exception as e:
-                 st.error(f"Error reading CSV file: {e}")
+                 st.error(f"Error reading or analyzing CSV file: {e}")
+                 logging.error(f"File Upload/Analysis Error: {e}", exc_info=True)
                  st.session_state.data = None
                  st.session_state.uploaded_file_name = None
+                 st.session_state.chat_history = []
+                 st.session_state.operation_result = None
 
         # Show operations only if data is loaded successfully
         if st.session_state.data is not None:
@@ -522,14 +690,14 @@ elif st.session_state.data_source == "Upload File":
                 st.markdown("---")
                 st.markdown(f"**Operation Result:**")
                 if isinstance(st.session_state.operation_result, str):
-                    st.markdown(st.session_state.operation_result)
+                    st.markdown(st.session_state.operation_result, unsafe_allow_html=False)
                 else:
                     st.write(st.session_state.operation_result)
-                # st.session_state.operation_result = None # Keep result
+                # st.session_state.operation_result = None # Clear result
 
     else:
-        # Reset if file is removed
-        if st.session_state.data is not None:
+        # Reset if file is removed or never uploaded
+        if st.session_state.data is not None or st.session_state.uploaded_file_name is not None:
             st.session_state.data = None
             st.session_state.uploaded_file_name = None
             st.session_state.chat_history = []
@@ -540,6 +708,7 @@ elif st.session_state.data_source == "Upload File":
 # --- Chat Interface (Common for both DB and File flows once data/table is active) ---
 if st.session_state.data is not None or st.session_state.selected_table is not None:
     st.subheader("4. Chat with your Data")
+    st.markdown("Ask questions about the current data (from file or database table) or request actions.")
 
     # Display chat history
     for message in st.session_state.chat_history:
@@ -547,13 +716,15 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
             st.markdown(message["content"])
             # Handle images stored in history
             if message.get("image"):
-                if isinstance(message["image"], str) and not message["image"].startswith("No"):
+                # Check if image path is valid and exists
+                img_path = message["image"]
+                if isinstance(img_path, str) and not img_path.startswith("No") and os.path.exists(img_path):
                     try:
-                        st.image(message["image"], use_column_width=True)
+                        st.image(img_path, use_column_width=True)
                     except Exception as img_e:
-                        st.warning(f"Could not display image {message['image']}: {img_e}")
-                elif isinstance(message["image"], str): # Handle "No plot generated" messages
-                    st.markdown(f"_{message['image']}_")
+                        st.warning(f"Could not display image {img_path}: {img_e}")
+                elif isinstance(img_path, str): # Handle "No plot generated" or error messages
+                    st.markdown(f"_{img_path}_")
 
 
     prompt = st.chat_input("Ask a question about the data or request actions...")
@@ -576,35 +747,38 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                 current_data = st.session_state.get('data') # Get current DataFrame if available
                 current_table = st.session_state.get('selected_table')
 
+                # Ensure data is loaded if a table is selected but data is None
+                if current_table and current_data is None:
+                     logging.info(f"Chat: Data for table '{current_table}' is None, attempting to fetch.")
+                     current_data, fetch_error = get_db_data(current_table)
+                     if fetch_error:
+                         logging.error(f"Chat: Failed to fetch data for table '{current_table}': {fetch_error}")
+                         # Respond with error and stop processing this chat message
+                         response = f"Error: Could not fetch data for table '{current_table}' to answer your question. {fetch_error}"
+                         st.session_state.chat_history.append({"role": "assistant", "content": response, "image": None})
+                         st.rerun()
+                     else:
+                         st.session_state.data = current_data # Update session state
+
+                # Build context string
                 if current_data is not None:
                     columns = current_data.columns.tolist()
-                    data_context = f"The user is currently working with data loaded from a file. The columns are: {columns}."
+                    source_info = f"data loaded from file '{st.session_state.get('uploaded_file_name', 'unknown file')}'" if st.session_state.data_source == "Upload File" else f"database table '{current_table}'"
+                    data_context = f"The user is currently working with {source_info}. The columns are: {columns}."
                     # Provide sample data for context
                     sample_data_head = current_data.head().to_string()
                     data_context += f"\nSample Data:\n{sample_data_head}"
-                elif current_table:
+                elif current_table: # Should not happen if fetch logic above works, but as fallback
                     schema_info_str = str(st.session_state.get('schema_info', 'Not available'))
-                    data_context = f"The user is currently working with the database table '{current_table}'. The database is MySQL named 'insightforge_db'. Schema info: {schema_info_str}."
-                    # Fetch sample data for context if not already loaded
-                    if current_data is None:
-                         df_sample, _ = get_db_data(current_table)
-                         if df_sample is not None:
-                             sample_data_head = df_sample.head().to_string()
-                             data_context += f"\nSample Data:\n{sample_data_head}"
-                             current_data = df_sample # Use this fetched data if needed below
-                         else:
-                             data_context += "\nCould not fetch sample data for the table."
-                    else:
-                         sample_data_head = current_data.head().to_string()
-                         data_context += f"\nSample Data:\n{sample_data_head}"
-
+                    data_context = f"The user is currently working with the database table '{current_table}'. The database is MySQL named 'insightforge_db'. Schema info: {schema_info_str}. Data is not currently loaded in memory."
                 else:
+                    # This case should ideally be prevented by the outer 'if' condition
                     response = "No data source (file or database table) is currently active. Please select one first."
                     st.session_state.chat_history.append({"role": "assistant", "content": response, "image": None})
                     st.rerun()
 
 
-                # Improved LLM Prompt for Planning
+                # --- LLM Planning Prompt ---
                 planning_prompt = f"""
                 Analyze the user's request: '{prompt}'
 
@@ -612,27 +786,27 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                 {data_context}
 
                 Determine the user's intent and classify it into ONE category:
-                1. Database Query: User asks about DB structure (tables, schema) or data within a specific DB table.
-                2. Data Analysis (File/Table): User asks a question about the loaded data (from file or selected table), like counts, averages, missing values, correlations, or requests a summary/insight.
-                3. Visualization Request: User asks for a plot, graph, or chart of the loaded data.
+                1. Database Query: User asks about DB structure (tables, schema) NOT related to the currently loaded data, or explicitly asks to query the database.
+                2. Data Analysis (File/Table): User asks a question about the currently loaded data (from file or selected table), like counts, averages, missing values, correlations, outliers, or requests a summary/insight.
+                3. Visualization Request: User asks for a plot, graph, or chart of the currently loaded data.
                 4. Web Research: User asks for external information (trends, definitions, etc.).
                 5. General Chit-chat/Unclear: The request is conversational or doesn't fit other categories.
 
                 Based on the category, provide a plan:
 
-                - If Database Query:
+                - If Database Query: (Only if the question is explicitly about DB structure unrelated to current data, or uses SQL keywords)
                     - If asking about tables: Plan: SQL Query: SHOW TABLES
-                    - If asking about schema of '{current_table}': Plan: SQL Query: DESCRIBE `{current_table}`
-                    - If asking for data from '{current_table}' (e.g., 'show first 10 rows', 'count rows', 'find where column X is Y'): Plan: SQL Query: [Generate appropriate SELECT query for `{current_table}`]
-                    - If asking about a DIFFERENT table: Plan: SQL Query: [Generate query for the mentioned table, e.g., `DESCRIBE \`other_table\`` or `SELECT * FROM \`other_table\` LIMIT 5`]
+                    - If asking about schema of a SPECIFIC table 'some_other_table': Plan: SQL Query: DESCRIBE `some_other_table`
+                    - If asking for data using SQL (e.g., 'SELECT * FROM x'): Plan: SQL Query: [Extract the SQL query]
                     - If asking about the database name: Plan: DB Name Request: True
 
                 - If Data Analysis (File/Table): (Requires loaded data: {'Yes' if current_data is not None else 'No'})
                     - If asking for missing values: Plan: Analysis Type: Missing Values
-                    - If asking for summary statistics: Plan: Analysis Type: Summary Stats
-                    - If asking for counts/averages/sums/min/max for specific columns/conditions: Plan: Analysis Type: Aggregation\nDetails: [Describe the aggregation needed, e.g., 'Average of ColA where ColB > 10']
+                    - If asking for summary statistics (describe, info): Plan: Analysis Type: Summary Stats
+                    - If asking for counts/averages/sums/min/max for specific columns/conditions (e.g., 'average rating', 'count where country is US'): Plan: Analysis Type: Aggregation\nDetails: [Describe the aggregation needed, e.g., 'Average of product_star_rating where country == "US"']
                     - If asking for correlation: Plan: Analysis Type: Correlation
-                    - If asking for general insights: Plan: Analysis Type: General Insight
+                    - If asking about outliers: Plan: Analysis Type: Outlier Check  # <-- Added Outlier Check
+                    - If asking for general insights/summary/report: Plan: Analysis Type: General Insight
 
                 - If Visualization Request: (Requires loaded data: {'Yes' if current_data is not None else 'No'})
                     - Plan: Plot Type: [Specify plot: scatter, histogram, boxplot, heatmap, bar]\nColumns: [Specify columns if mentioned, e.g., X=colA, Y=colB, Target=colC]
@@ -656,7 +830,7 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                 plan_match = re.search(r"Plan:\s*(.+)", llm_response, re.DOTALL)
 
                 if not category_match or not plan_match:
-                    response = f"I had trouble understanding the structure of the plan. Could you rephrase?\nDebug Info:\n{llm_response}"
+                    response = f"I had trouble understanding how to proceed with your request. Could you please rephrase?\nDebug Info:\n{llm_response}"
                 else:
                     category = category_match.group(1).strip()
                     plan = plan_match.group(1).strip()
@@ -664,67 +838,125 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
 
                     # --- Execute Plan ---
                     if category == "Database Query":
-                        db_name_match = re.search(r"DB Name Request:\s*True", plan)
-                        sql_query_match = re.search(r"SQL Query:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
-                        if db_name_match:
-                            response = "I am connected to the 'insightforge_db' database."
-                        elif sql_query_match:
-                            sql_query = sql_query_match.group(1).strip()
-                            # Basic safety: Check for common harmful patterns (can be improved)
-                            if re.search(r"(DROP|DELETE|UPDATE|INSERT|ALTER)\s+", sql_query, re.IGNORECASE):
-                                 response = "Sorry, I cannot execute queries that modify data (like DROP, DELETE, UPDATE, INSERT, ALTER)."
-                            else:
-                                try:
-                                    raw_result = db_agent.query(sql_query)
-                                    response = format_database_response(raw_result, prompt, st.session_state.get('schema_info'))
-                                except Exception as e:
-                                    response = f"Error executing database query: {str(e)}"
-                                    logging.error(f"DB Query Error: {e}", exc_info=True)
+                        if not st.session_state.get('db_connected', False):
+                             response = "Database connection is not available to execute this query."
                         else:
-                            response = "I understood you want a database query, but I couldn't extract a specific SQL command from the plan."
+                            db_name_match = re.search(r"DB Name Request:\s*True", plan)
+                            sql_query_match = re.search(r"SQL Query:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
+                            if db_name_match:
+                                response = "I am connected to the 'insightforge_db' database (or the one specified in config)."
+                            elif sql_query_match:
+                                sql_query = sql_query_match.group(1).strip()
+                                # Basic safety: Check for common harmful patterns
+                                if re.search(r"\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE)\b", sql_query, re.IGNORECASE):
+                                     response = "Sorry, I cannot execute queries that modify data (like DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE)."
+                                else:
+                                    try:
+                                        with st.spinner("Executing database query..."):
+                                             raw_result = db_agent.query(sql_query)
+                                        response = format_database_response(raw_result, prompt, st.session_state.get('schema_info'))
+                                    except Exception as e:
+                                        response = f"Error executing database query: {str(e)}"
+                                        logging.error(f"DB Query Error: {e}", exc_info=True)
+                            else:
+                                response = "I understood you want a database query, but I couldn't extract a specific SQL command from the plan."
 
                     elif category == "Data Analysis (File/Table)":
                         if current_data is None:
+                            # This check might be redundant due to fetch logic above, but good safety net
                             response = "No data is currently loaded. Please upload a file or select and analyze a database table first."
                         else:
                             analysis_type_match = re.search(r"Analysis Type:\s*(.+?)(?:\n|$)", plan)
                             if analysis_type_match:
                                 analysis_type = analysis_type_match.group(1).strip()
                                 try:
-                                    if analysis_type == "Missing Values":
-                                        missing_counts = current_data.isnull().sum()
-                                        missing_filtered = missing_counts[missing_counts > 0]
-                                        if missing_filtered.empty:
-                                            response = "There are no missing values in the current dataset."
+                                    with st.spinner(f"Performing {analysis_type} analysis..."):
+                                        if analysis_type == "Missing Values":
+                                            missing_counts = current_data.isnull().sum()
+                                            missing_filtered = missing_counts[missing_counts > 0]
+                                            if missing_filtered.empty:
+                                                response = "There are no missing values in the current dataset."
+                                            else:
+                                                response = "Missing value counts per column:\n```\n" + missing_filtered.to_string() + "\n```"
+                                        elif analysis_type == "Summary Stats":
+                                            buffer = io.StringIO()
+                                            current_data.info(buf=buffer)
+                                            info_str = buffer.getvalue()
+                                            desc_str = current_data.describe(include='all').to_string()
+                                            response = f"**Data Info:**\n```\n{info_str}\n```\n\n**Summary Statistics:**\n```\n{desc_str}\n```"
+                                        elif analysis_type == "Correlation":
+                                            numeric_df = current_data.select_dtypes(include=np.number)
+                                            if numeric_df.shape[1] < 2:
+                                                 response = "Need at least two numeric columns for correlation analysis."
+                                            else:
+                                                 corr_matrix = numeric_df.corr()
+                                                 response = "**Correlation Matrix:**\n```\n" + corr_matrix.to_string() + "\n```"
+                                                 # Optionally generate heatmap image
+                                                 image_path = viz_agent.generate_correlation_heatmap(current_data) # Use original data
+                                                 if image_path and not image_path.startswith("No") and os.path.exists(image_path):
+                                                     response += "\n\nDisplaying heatmap below."
+                                                 elif image_path: # Handle error messages like "No numeric columns..."
+                                                     response += f"\n\n_Note: Could not generate heatmap: {image_path}_"
+
+                                        # --- ADDED Outlier Check Block ---
+                                        elif analysis_type == "Outlier Check":
+                                            numeric_cols = current_data.select_dtypes(include=np.number).columns
+                                            outlier_details = []
+                                            found_outliers = False
+                                            if not numeric_cols.empty:
+                                                for col in numeric_cols:
+                                                    # Simple IQR check (similar to cleaning agent)
+                                                    col_data_numeric = pd.to_numeric(current_data[col], errors='coerce').dropna()
+                                                    if col_data_numeric.empty or col_data_numeric.nunique() <= 1:
+                                                        continue # Skip columns with no variance or no numeric data
+
+                                                    Q1 = col_data_numeric.quantile(0.25)
+                                                    Q3 = col_data_numeric.quantile(0.75)
+                                                    IQR = Q3 - Q1
+
+                                                    if IQR == 0: continue # Skip if IQR is zero
+
+                                                    lower_bound = Q1 - 1.5 * IQR
+                                                    upper_bound = Q3 + 1.5 * IQR
+
+                                                    # Check original data (before potential numeric conversion issues)
+                                                    outliers_mask = (pd.to_numeric(current_data[col], errors='coerce') < lower_bound) | (pd.to_numeric(current_data[col], errors='coerce') > upper_bound)
+                                                    outlier_count = outliers_mask.sum()
+
+                                                    if outlier_count > 0:
+                                                        found_outliers = True
+                                                        outlier_details.append(f"- **`{col}`:** {outlier_count} potential outlier(s) found outside the range [{lower_bound:.2f}, {upper_bound:.2f}].")
+
+                                            if found_outliers:
+                                                response = "Yes, potential outliers were detected based on the IQR method:\n" + "\n".join(outlier_details)
+                                                response += "\n\n*Note: This is based on a standard statistical method (1.5 * IQR). These values might be valid but are statistically unusual compared to the bulk of the data in their respective columns. Consider using the 'Clean Data' operation or further investigation.*"
+                                            elif not numeric_cols.empty:
+                                                response = "No obvious outliers were detected in the numeric columns using the standard IQR method."
+                                            else:
+                                                response = "No numeric columns were found to check for outliers."
+                                        # --- END OF Outlier Check Block ---
+
+                                        elif analysis_type == "Aggregation":
+                                             # This requires more complex parsing or a dedicated agent/tool
+                                             # For now, use LLM to attempt answering directly from context
+                                             aggregation_prompt = f"""
+                                             Context:
+                                             The user is analyzing data with columns: {current_data.columns.tolist()}
+                                             Sample Data:
+                                             {current_data.head().to_string()}
+
+                                             User Question: '{prompt}'
+
+                                             Based ONLY on the provided sample data and column names, try to answer the user's aggregation question. If you can calculate it from the sample, provide the answer. If the sample is insufficient or the calculation is complex, state that you need to perform a full data calculation and suggest how the user might ask for it (e.g., 'Calculate the average of X'). Do not invent data.
+                                             """
+                                             response = content_agent.generate(aggregation_prompt)
+                                             # TODO: Implement robust aggregation using pandas if LLM fails or needs full data.
+
+                                        elif analysis_type == "General Insight":
+                                             response = generate_data_report(current_data) # Reuse the report function
+
                                         else:
-                                            response = "Missing value counts per column:\n" + missing_filtered.to_string()
-                                    elif analysis_type == "Summary Stats":
-                                        response = "Summary Statistics:\n" + current_data.describe(include='all').to_string()
-                                    elif analysis_type == "Correlation":
-                                        numeric_df = current_data.select_dtypes(include=np.number)
-                                        if numeric_df.shape[1] < 2:
-                                             response = "Need at least two numeric columns for correlation analysis."
-                                        else:
-                                             corr_matrix = numeric_df.corr()
-                                             response = "Correlation Matrix:\n" + corr_matrix.to_string()
-                                             # Optionally generate heatmap image
-                                             image_path = viz_agent.generate_correlation_heatmap(current_data) # Use original data
-                                             if image_path and not image_path.startswith("No"):
-                                                 response += "\n\nDisplaying heatmap below."
-                                             else:
-                                                 response += f"\n\nCould not generate heatmap: {image_path}"
-
-                                    elif analysis_type == "Aggregation":
-                                         # This requires more complex parsing of 'Details' - using LLM again might be needed
-                                         # For now, provide a generic response or ask for clarification
-                                         response = f"I understand you want an aggregation: {plan}. Can you please ask using a more direct question like 'What is the average of X?' or 'Count rows where Y is Z'?"
-                                         # TODO: Implement more robust aggregation handling if needed
-
-                                    elif analysis_type == "General Insight":
-                                         response = generate_data_report(current_data) # Reuse the report function
-
-                                    else:
-                                         response = f"I recognized the analysis type '{analysis_type}', but I don't know how to perform it yet."
+                                             response = f"I recognized the analysis type '{analysis_type}', but I don't know how to perform it yet."
 
                                 except Exception as e:
                                     response = f"Error during data analysis: {e}"
@@ -740,44 +972,65 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                             columns_match = re.search(r"Columns:\s*(.+?)(?:\n|$)", plan)
 
                             if plot_type_match:
-                                plot_type = plot_type_match.group(1).strip().lower()
+                                plot_type = plot_type_match.group(1).strip().lower().replace(" ", "_") # Normalize plot type
                                 cols_text = columns_match.group(1).strip() if columns_match else ""
-                                # Basic column extraction (can be improved)
-                                x_col, y_col, target_col = None, None, None
-                                if 'x=' in cols_text.lower(): x_col = re.search(r"X=([\w\s]+)(?:,|$)", cols_text, re.IGNORECASE).group(1).strip()
-                                if 'y=' in cols_text.lower(): y_col = re.search(r"Y=([\w\s]+)(?:,|$)", cols_text, re.IGNORECASE).group(1).strip()
-                                if 'target=' in cols_text.lower(): target_col = re.search(r"Target=([\w\s]+)(?:,|$)", cols_text, re.IGNORECASE).group(1).strip()
-                                # If only one column mentioned for histogram/box, assume it's the target
+                                # Basic column extraction (can be improved with regex)
+                                x_col, y_col, target_col, hue_col = None, None, None, None
+                                col_specs = re.findall(r"(\w+)\s*=\s*([\w\s]+?)(?:,|$)", cols_text)
+                                for key, val in col_specs:
+                                    key_lower = key.lower()
+                                    val_stripped = val.strip()
+                                    if key_lower == 'x': x_col = val_stripped
+                                    elif key_lower == 'y': y_col = val_stripped
+                                    elif key_lower == 'target' or key_lower == 'column': target_col = val_stripped
+                                    elif key_lower == 'hue' or key_lower == 'color': hue_col = val_stripped
+
+                                # If only one column mentioned for histogram/box/dist, assume it's the target
                                 if not target_col and not x_col and not y_col and cols_text and plot_type in ['histogram', 'boxplot', 'distribution']:
-                                    target_col = cols_text
+                                    # Check if cols_text is likely a single column name
+                                    if cols_text in current_data.columns:
+                                         target_col = cols_text
 
                                 try:
-                                    if plot_type == "scatter":
-                                        image_path = viz_agent.generate_scatter(current_data, x_col=x_col, y_col=y_col)
-                                        response = f"Generating scatter plot{' of ' + x_col + ' vs ' + y_col if x_col and y_col else ''}..."
-                                    elif plot_type in ["histogram", "distribution"]:
-                                        image_path = viz_agent.generate_distribution(current_data, hist_col=target_col) # Use target_col
-                                        response = f"Generating distribution plot{' for ' + target_col if target_col else ''}..."
-                                    elif plot_type == "boxplot":
-                                        image_path = viz_agent.generate_boxplot(current_data, box_col=target_col) # Use target_col
-                                        response = f"Generating boxplot{' for ' + target_col if target_col else ''}..."
-                                    elif plot_type == "heatmap":
-                                        image_path = viz_agent.generate_correlation_heatmap(current_data)
-                                        response = "Generating correlation heatmap..."
-                                    elif plot_type == "bar":
-                                        # Bar plots need more specific logic (e.g., counts of a category)
-                                        # image_path = viz_agent.generate_bar(current_data, ...) # Needs implementation
-                                        response = "Bar plots require specifying the categorical column. For example: 'bar plot of column Category'."
-                                        # Placeholder - needs implementation in VisualizationAgent and logic here
-                                    else:
-                                        response = f"Sorry, I don't know how to generate a '{plot_type}' plot yet. Try scatter, histogram, boxplot, or heatmap."
+                                    with st.spinner(f"Generating {plot_type} plot..."):
+                                        if plot_type == "scatter":
+                                            image_path = viz_agent.generate_scatter(current_data, x_col=x_col, y_col=y_col, hue_col=hue_col)
+                                            response = f"Generating scatter plot..."
+                                        elif plot_type in ["histogram", "distribution"]:
+                                            # Pass target_col as hist_col to the agent function
+                                            image_path = viz_agent.generate_distribution(current_data, hist_col=target_col)
+                                            response = f"Generating distribution plot{' for ' + target_col if target_col else ''}..."
+                                        elif plot_type == "boxplot":
+                                            # Pass target_col as box_col if your agent expects that
+                                            # Assuming generate_boxplot takes a specific column argument
+                                            # Modify this call based on your VisualizationAgent's method signature
+                                            # Let's assume it also uses 'hist_col' for simplicity here, adjust if needed
+                                            image_path = viz_agent.generate_boxplot(current_data, box_col=target_col) # Assuming generate_boxplot exists
+                                            response = f"Generating boxplot{' for ' + target_col if target_col else ''}..."
+                                        elif plot_type == "heatmap":
+                                            image_path = viz_agent.generate_correlation_heatmap(current_data)
+                                            response = "Generating correlation heatmap..."
+                                        elif plot_type == "bar":
+                                            # Bar plots need more specific logic (e.g., counts of a category)
+                                            # image_path = viz_agent.generate_bar(current_data, cat_col=target_col) # Needs implementation
+                                            response = "Bar plots typically show counts for categories. Please specify the categorical column. For example: 'bar plot of column Country'."
+                                            image_path = "Bar plot generation not fully implemented yet." # Placeholder
+                                        else:
+                                            response = f"Sorry, I don't know how to generate a '{plot_type}' plot yet. Try scatter, histogram, boxplot, or heatmap."
+                                            image_path = None
 
-                                    if image_path and image_path.startswith("No"):
-                                        response = f"Could not generate {plot_type} plot: {image_path}" # Report failure reason
-                                        image_path = None # Don't store failure message as image path
-                                    elif not image_path:
-                                         response = f"Failed to generate {plot_type} plot (no path returned)."
-
+                                        # Process result path
+                                        if image_path and image_path.startswith("No"): # Handle agent's error messages
+                                            response = f"Could not generate {plot_type} plot: {image_path}"
+                                            image_path = None # Don't store failure message as image path
+                                        elif image_path and not os.path.exists(image_path): # Check if file exists
+                                             response = f"Failed to generate {plot_type} plot (file not found at {image_path})."
+                                             logging.error(f"Generated plot file not found: {image_path}")
+                                             image_path = None
+                                        elif not image_path:
+                                             # Handle cases where agent returns None or empty string without specific error
+                                             if not response: # If response wasn't set by specific plot logic
+                                                  response = f"Failed to generate {plot_type} plot (no path returned)."
 
                                 except Exception as e:
                                     response = f"Error generating visualization: {e}"
@@ -790,7 +1043,8 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                         topic_match = re.search(r"Topic:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
                         if topic_match:
                             topic = topic_match.group(1).strip()
-                            response = web_agent.research(topic)
+                            with st.spinner(f"Researching '{topic}'..."):
+                                 response = web_agent.research(topic)
                         else:
                             response = "I understood you want web research, but I couldn't extract the topic from the plan."
 
@@ -809,3 +1063,16 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
         st.session_state.chat_history.append({"role": "assistant", "content": response, "image": image_path})
         # Rerun to display the new messages and potential image
         st.rerun()
+
+# Add a footer or sidebar link to go back
+st.sidebar.markdown("---")
+if st.sidebar.button("Reset & Select New Source"):
+    # Clear relevant session state variables
+    st.session_state.data = None
+    st.session_state.data_source = None
+    st.session_state.selected_table = None
+    st.session_state.uploaded_file_name = None
+    st.session_state.chat_history = []
+    st.session_state.operation_result = None
+    st.session_state.schema_info = None
+    st.rerun()
