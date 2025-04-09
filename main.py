@@ -11,7 +11,8 @@ import logging
 import io
 from agents.database_agent import DatabaseAgent
 from agents.web_scraping_agent import WebScrapingAgent
-from agents.visualization_agent import VisualizationAgent # Assuming this agent is updated to return (path, description)
+# IMPORTANT: Ensure VisualizationAgent methods return (path: str|None, description: str)
+from agents.visualization_agent import VisualizationAgent
 from agents.content_generation_agent import ContentGenerationAgent
 from agents.report_generation_agent import ReportGenerationAgent
 from agents.analysis_agent import AnalysisAgent
@@ -382,8 +383,9 @@ def perform_operation(operation, data, table_name=None):
                     # Check if image_path is valid and points to an existing file
                     if image_path and isinstance(image_path, str) and os.path.exists(image_path):
                         try:
-                            # Use description as caption
-                            st.image(image_path, caption=f"{title}: {description}", use_column_width=True)
+                            # Use description as caption if available, otherwise use title
+                            caption_text = f"{title}: {description}" if description else title
+                            st.image(image_path, caption=caption_text, use_column_width=True)
                             images_generated = True
                         except Exception as img_e:
                              result_string += f"- {title}: Error displaying image {image_path}: {img_e}\n"
@@ -821,6 +823,7 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
 
 
                 # --- LLM Planning Prompt ---
+                # MODIFIED: Added guidance for distribution plots
                 planning_prompt = f"""
                 Analyze the user's request: '{prompt}'
 
@@ -852,7 +855,9 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                     - If asking for general insights/summary/report: Plan: Analysis Type: General Insight
 
                 - If Visualization Request: (Requires loaded data: {'Yes' if current_data is not None else 'No'})
-                    - Plan: Plot Type: [Specify plot: scatter, histogram, boxplot, heatmap, bar]\nColumns: [Specify columns if mentioned, e.g., X=colA, Y=colB, Target=colC, Hue=colD]
+                    - **Guidance:** If the user asks for a 'distribution plot', 'histogram', or mentions 'skewness' for a *specific column* (e.g., 'distribution of price'), plan for 'histogram' and specify the column as 'Target'.
+                    - **Guidance:** If the user asks for a 'distribution plot' or mentions 'skewness' *without* specifying a column, plan for 'histogram' but leave the 'Columns' field empty or note that the column is unspecified.
+                    - Plan: Plot Type: [Specify plot: scatter, histogram, boxplot, heatmap, bar]\nColumns: [Specify columns if mentioned, e.g., X=colA, Y=colB, Target=colC, Hue=colD. If histogram/boxplot requested but column unclear, leave empty or state 'Target=Unspecified']
 
                 - If Web Research:
                     - Plan: Topic: [Extract the research topic]
@@ -945,11 +950,17 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                                  corr_matrix = numeric_df.corr()
                                                  response_text = "**Correlation Matrix:**\n```\n" + corr_matrix.to_string() + "\n```"
                                                  if image_path and os.path.exists(image_path):
-                                                     response_text += f"\n\n{plot_description}" # Add description text
+                                                     # Ensure plot_description is not None or empty, provide default if needed
+                                                     desc_text = plot_description if plot_description else "Correlation heatmap."
+                                                     response_text += f"\n\n{desc_text}" # Add description text
                                                      # Image path is already set, will be added to history later
                                                  elif plot_description: # Handle error messages like "No numeric columns..."
                                                      response_text += f"\n\n_Note: Could not generate heatmap: {plot_description}_"
                                                      image_path = None # Ensure no image path on failure
+                                                 else: # Fallback if agent returned None for both
+                                                     response_text += f"\n\n_Note: Could not generate heatmap (unknown reason)._"
+                                                     image_path = None
+
 
                                         elif analysis_type == "Outlier Check":
                                             numeric_cols = current_data.select_dtypes(include=np.number).columns
@@ -981,18 +992,97 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                                 response_text = "No numeric columns were found to check for outliers."
 
                                         elif analysis_type == "Aggregation":
-                                             aggregation_prompt = f"""
-                                             Context:
-                                             The user is analyzing data with columns: {current_data.columns.tolist()}
-                                             Sample Data:
-                                             {current_data.head().to_string()}
+                                            # --- MODIFIED: Implement robust aggregation ---
+                                            details_match = re.search(r"Details:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
+                                            details_text = details_match.group(1).strip() if details_match else ""
 
-                                             User Question: '{prompt}'
+                                            # Attempt to parse details for aggregation parameters
+                                            # Example: 'Average of product_star_rating where country == "US"'
+                                            agg_pattern = re.compile(r"(average|mean|sum|count|min|max|median|std)\s+of\s+`?([\w\s]+)`?(?:\s+where\s+(.*))?", re.IGNORECASE)
+                                            agg_match = agg_pattern.match(details_text)
 
-                                             Based ONLY on the provided sample data and column names, try to answer the user's aggregation question. If you can calculate it from the sample, provide the answer. If the sample is insufficient or the calculation is complex, state that you need to perform a full data calculation and suggest how the user might ask for it (e.g., 'Calculate the average of X'). Do not invent data.
-                                             """
-                                             response_text = content_agent.generate(aggregation_prompt)
-                                             # TODO: Implement robust aggregation using pandas if LLM fails or needs full data.
+                                            if agg_match:
+                                                agg_func_str = agg_match.group(1).lower()
+                                                agg_col = agg_match.group(2).strip().strip('`')
+                                                condition = agg_match.group(3).strip() if agg_match.group(3) else None
+
+                                                # Validate column name
+                                                if agg_col not in current_data.columns:
+                                                    response_text = f"Error: Column '{agg_col}' not found in the data."
+                                                else:
+                                                    try:
+                                                        # Apply filtering if condition exists
+                                                        filtered_data = current_data
+                                                        if condition:
+                                                            # Use pandas.query for safe evaluation of conditions
+                                                            filtered_data = current_data.query(condition)
+
+                                                        if filtered_data.empty and condition:
+                                                            response_text = f"No data matches the condition: {condition}"
+                                                        elif filtered_data.empty:
+                                                             response_text = f"No data available to calculate {agg_func_str} of '{agg_col}'."
+                                                        else:
+                                                            # Perform aggregation
+                                                            target_series = filtered_data[agg_col]
+                                                            result = None
+                                                            if agg_func_str in ["average", "mean"]:
+                                                                # Ensure column is numeric for mean
+                                                                if pd.api.types.is_numeric_dtype(target_series):
+                                                                    result = target_series.mean()
+                                                                else:
+                                                                    response_text = f"Cannot calculate the average of non-numeric column '{agg_col}'."
+                                                            elif agg_func_str == "sum":
+                                                                if pd.api.types.is_numeric_dtype(target_series):
+                                                                    result = target_series.sum()
+                                                                else:
+                                                                    response_text = f"Cannot calculate the sum of non-numeric column '{agg_col}'."
+                                                            elif agg_func_str == "count":
+                                                                result = target_series.count() # Counts non-NA values
+                                                            elif agg_func_str == "min":
+                                                                result = target_series.min()
+                                                            elif agg_func_str == "max":
+                                                                result = target_series.max()
+                                                            elif agg_func_str == "median":
+                                                                if pd.api.types.is_numeric_dtype(target_series):
+                                                                    result = target_series.median()
+                                                                else:
+                                                                    response_text = f"Cannot calculate the median of non-numeric column '{agg_col}'."
+                                                            elif agg_func_str == "std":
+                                                                if pd.api.types.is_numeric_dtype(target_series):
+                                                                    result = target_series.std()
+                                                                else:
+                                                                    response_text = f"Cannot calculate the standard deviation of non-numeric column '{agg_col}'."
+
+                                                            if result is not None:
+                                                                # Format result nicely
+                                                                if isinstance(result, float):
+                                                                    result_str = f"{result:,.4f}" # Format floats
+                                                                else:
+                                                                    result_str = str(result)
+
+                                                                condition_str = f" where {condition}" if condition else ""
+                                                                response_text = f"The {agg_func_str} of **`{agg_col}`**{condition_str} is: **{result_str}**"
+                                                            # else: response_text might already be set with an error message
+
+                                                    except Exception as agg_e:
+                                                        response_text = f"Error performing aggregation: {agg_e}"
+                                                        logging.error(f"Aggregation Error: {agg_e}", exc_info=True)
+
+                                            else:
+                                                # Fallback if details couldn't be parsed or LLM didn't provide enough
+                                                logging.warning(f"Could not parse aggregation details: {details_text}. Falling back to LLM prompt.")
+                                                aggregation_prompt = f"""
+                                                Context:
+                                                The user is analyzing data with columns: {current_data.columns.tolist()}
+                                                Sample Data:
+                                                {current_data.head().to_string()}
+
+                                                User Question: '{prompt}'
+
+                                                Based ONLY on the provided sample data and column names, try to answer the user's aggregation question. If you can calculate it from the sample, provide the answer. If the sample is insufficient or the calculation is complex, state that you need to perform a full data calculation and suggest how the user might ask for it (e.g., 'Calculate the average of X'). Do not invent data.
+                                                """
+                                                response_text = content_agent.generate(aggregation_prompt)
+                                            # --- End of Aggregation Modification ---
 
                                         elif analysis_type == "General Insight":
                                              response_text = generate_data_report(current_data) # Reuse the report function
@@ -1018,7 +1108,10 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                 cols_text = columns_match.group(1).strip() if columns_match else ""
                                 # Basic column extraction (can be improved with regex)
                                 x_col, y_col, target_col, hue_col = None, None, None, None
-                                col_specs = re.findall(r"(\w+)\s*=\s*([\w\s`']+?)(?:,|$)", cols_text) # Allow quoted/backticked names
+                                # Check for explicit unspecified target
+                                unspecified_target = "Target=Unspecified" in cols_text or not cols_text
+
+                                col_specs = re.findall(r"(\w+)\s*=\s*([\w\s`'.]+?)(?:,|$)", cols_text) # Allow quoted/backticked/spaced names
                                 for key, val in col_specs:
                                     key_lower = key.lower()
                                     # Remove potential quotes/backticks from column name
@@ -1029,50 +1122,73 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                     elif key_lower == 'hue' or key_lower == 'color': hue_col = val_stripped
 
                                 # If only one column mentioned for histogram/box/dist, assume it's the target
-                                if not target_col and not x_col and not y_col and cols_text and plot_type in ['histogram', 'boxplot', 'distribution']:
+                                if not target_col and not x_col and not y_col and cols_text and "Target=Unspecified" not in cols_text and plot_type in ['histogram', 'boxplot', 'distribution', 'bar']: # Added 'bar' here
                                     potential_col = cols_text.strip().strip('`\'"')
                                     if potential_col in current_data.columns:
                                          target_col = potential_col
+                                         unspecified_target = False # We found it
 
-                                try:
-                                    with st.spinner(f"Generating {plot_type} plot..."):
-                                        # --- MODIFIED: Expect tuple (image_path, plot_description) from agent ---
-                                        image_path, plot_description = None, None # Reset before call
+                                # Check for missing target column for plots that require one
+                                if plot_type in ["histogram", "distribution", "boxplot", "bar"] and not target_col:
+                                    # Check if the LLM explicitly marked it as unspecified or if we just couldn't find one
+                                    if unspecified_target or not target_col:
+                                        plot_name = plot_type.replace('_', ' ')
+                                        col_type = "categorical" if plot_type == "bar" else "numeric"
+                                        response_text = f"Please specify which {col_type} column you want a {plot_name} for. For example: 'Show me a {plot_name} of [column name]'."
+                                        # Skip the rest of the visualization logic
+                                    else:
+                                        # This case should be less likely now, but handle if target_col is None unexpectedly
+                                        response_text = f"Could not determine the target column for the {plot_type.replace('_', ' ')}. Please specify it."
+                                        # Skip the rest of the visualization logic
 
-                                        if plot_type == "scatter":
-                                            image_path, plot_description = viz_agent.generate_scatter(current_data, x_col=x_col, y_col=y_col, hue_col=hue_col)
-                                        elif plot_type in ["histogram", "distribution"]:
-                                            image_path, plot_description = viz_agent.generate_distribution(current_data, hist_col=target_col)
-                                        elif plot_type == "boxplot":
-                                            if hasattr(viz_agent, 'generate_boxplot'):
-                                                image_path, plot_description = viz_agent.generate_boxplot(current_data, box_col=target_col)
+                                else: # Proceed with generation if target column is specified or not needed
+                                    try:
+                                        with st.spinner(f"Generating {plot_type} plot..."):
+                                            # Expect tuple (image_path, plot_description) from agent
+                                            image_path, plot_description = None, None # Reset before call
+
+                                            if plot_type == "scatter":
+                                                image_path, plot_description = viz_agent.generate_scatter(current_data, x_col=x_col, y_col=y_col, hue_col=hue_col)
+                                            elif plot_type in ["histogram", "distribution"]:
+                                                # Pass target_col identified above
+                                                image_path, plot_description = viz_agent.generate_distribution(current_data, hist_col=target_col)
+                                            elif plot_type == "boxplot":
+                                                if hasattr(viz_agent, 'generate_boxplot'):
+                                                    # Pass target_col identified above
+                                                    image_path, plot_description = viz_agent.generate_boxplot(current_data, box_col=target_col)
+                                                else:
+                                                    plot_description = "Boxplot generation is not currently implemented in the Visualization Agent."
+                                            elif plot_type == "heatmap":
+                                                image_path, plot_description = viz_agent.generate_correlation_heatmap(current_data)
+                                            elif plot_type == "bar":
+                                                # --- MODIFIED: Call generate_bar ---
+                                                if hasattr(viz_agent, 'generate_bar'):
+                                                    # Pass target_col (assumed categorical here)
+                                                    image_path, plot_description = viz_agent.generate_bar(current_data, cat_col=target_col)
+                                                else:
+                                                    plot_description = "Bar plot generation is not currently implemented in the Visualization Agent."
+                                                # --- End of Bar Plot Modification ---
                                             else:
-                                                plot_description = "Boxplot generation is not currently implemented in the Visualization Agent."
-                                        elif plot_type == "heatmap":
-                                            image_path, plot_description = viz_agent.generate_correlation_heatmap(current_data)
-                                        elif plot_type == "bar":
-                                            # Needs implementation in viz_agent returning (path, desc)
-                                            # image_path, plot_description = viz_agent.generate_bar(current_data, cat_col=target_col)
-                                            plot_description = "Bar plots typically show counts for categories. Please specify the categorical column. (Bar plot generation not fully implemented yet)."
-                                        else:
-                                            plot_description = f"Sorry, I don't know how to generate a '{plot_type}' plot yet. Try scatter, histogram, boxplot, or heatmap."
+                                                # Handle unrecognized plot types planned by LLM
+                                                plot_description = f"Sorry, I don't know how to generate a '{plot_type}' plot yet. Try scatter, histogram, boxplot, bar, or heatmap."
 
-                                        # --- MODIFIED: Process result tuple ---
-                                        if image_path and isinstance(image_path, str) and os.path.exists(image_path):
-                                            # Success: We have a valid image path
-                                            response_text = plot_description # Use the description from the agent
-                                            # image_path is already set
-                                        elif plot_description: # Handle cases where image failed but we have a description/error
-                                            response_text = f"Could not generate plot: {plot_description}"
-                                            image_path = None # Ensure no broken image link
-                                        else: # Fallback if agent returned None for both path and description
-                                            response_text = f"Failed to generate {plot_type} plot (unknown reason)."
-                                            image_path = None
+                                            # Process result tuple
+                                            if image_path and isinstance(image_path, str) and os.path.exists(image_path):
+                                                # Success: We have a valid image path
+                                                # Ensure plot_description is not None or empty, provide default if needed
+                                                response_text = plot_description if plot_description else f"Generated {plot_type.replace('_', ' ')} plot."
+                                                # image_path is already set
+                                            elif plot_description: # Handle cases where image failed but we have a description/error
+                                                response_text = f"Could not generate plot: {plot_description}"
+                                                image_path = None # Ensure no broken image link
+                                            else: # Fallback if agent returned None for both path and description
+                                                response_text = f"Failed to generate {plot_type} plot (unknown reason)."
+                                                image_path = None
 
-                                except Exception as e:
-                                    response_text = f"Error generating visualization: {e}"
-                                    logging.error(f"Viz Error: {e}", exc_info=True)
-                                    image_path = None
+                                    except Exception as e:
+                                        response_text = f"Error generating visualization: {e}"
+                                        logging.error(f"Viz Error: {e}", exc_info=True)
+                                        image_path = None
                             else:
                                 response_text = "I understood you want a visualization, but couldn't determine the plot type or columns from the plan."
 
@@ -1116,3 +1232,5 @@ if st.sidebar.button("Reset & Select New Source"):
     st.session_state.operation_result = None
     st.session_state.schema_info = None
     st.rerun()
+
+# --- END OF MAIN APP LOGIC ---
