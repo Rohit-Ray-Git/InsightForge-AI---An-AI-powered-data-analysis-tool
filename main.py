@@ -849,7 +849,7 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                     - If asking for column names or list of columns: Plan: Analysis Type: List Columns
                     - If asking for missing values: Plan: Analysis Type: Missing Values
                     - If asking for summary statistics (describe, info): Plan: Analysis Type: Summary Stats
-                    - If asking for counts/averages/sums/min/max for specific columns/conditions (e.g., 'average rating', 'count where country is US'): Plan: Analysis Type: Aggregation\nDetails: [Describe the aggregation needed, e.g., 'Average of product_star_rating where country == "US"']
+                    - If asking for counts/averages/sums/min/max/unique counts for specific columns/conditions (e.g., 'average rating', 'count where country is US', 'number of unique products'): Plan: Analysis Type: Aggregation\nDetails: [Describe the aggregation needed, e.g., 'Average of product_star_rating where country == "US"', 'Count unique values in product_name']
                     - If asking for correlation: Plan: Analysis Type: Correlation
                     - If asking about outliers: Plan: Analysis Type: Outlier Check
                     - If asking for general insights/summary/report: Plan: Analysis Type: General Insight
@@ -991,86 +991,105 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                             else:
                                                 response_text = "No numeric columns were found to check for outliers."
 
+                                        # ===========================================================
+                                        # START: MODIFIED AGGREGATION BLOCK
+                                        # ===========================================================
                                         elif analysis_type == "Aggregation":
-                                            # --- MODIFIED: Implement robust aggregation ---
                                             details_match = re.search(r"Details:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
-                                            details_text = details_match.group(1).strip() if details_match else ""
+                                            # Use prompt as fallback if details are missing or empty
+                                            details_text = details_match.group(1).strip() if details_match and details_match.group(1).strip() else prompt
 
-                                            # Attempt to parse details for aggregation parameters
-                                            # Example: 'Average of product_star_rating where country == "US"'
-                                            agg_pattern = re.compile(r"(average|mean|sum|count|min|max|median|std)\s+of\s+`?([\w\s]+)`?(?:\s+where\s+(.*))?", re.IGNORECASE)
-                                            agg_match = agg_pattern.match(details_text)
+                                            agg_handled = False # Flag to track if we handled the request
 
-                                            if agg_match:
-                                                agg_func_str = agg_match.group(1).lower()
-                                                agg_col = agg_match.group(2).strip().strip('`')
-                                                condition = agg_match.group(3).strip() if agg_match.group(3) else None
+                                            # 1. Check specifically for UNIQUE COUNT requests
+                                            # Regex looks for unique count phrases and captures the column name
+                                            unique_pattern = re.compile(r"(?:unique\s+count|count\s+unique|number\s+of\s+unique)\s+(?:values\s+in|of)?\s+`?([\w\s]+)`?", re.IGNORECASE)
+                                            unique_match = unique_pattern.search(details_text)
 
+                                            if unique_match:
+                                                agg_col = unique_match.group(1).strip().strip('`')
                                                 # Validate column name
                                                 if agg_col not in current_data.columns:
-                                                    response_text = f"Error: Column '{agg_col}' not found in the data."
+                                                    response_text = f"Error: Column '{agg_col}' not found in the data for unique count."
                                                 else:
                                                     try:
-                                                        # Apply filtering if condition exists
-                                                        filtered_data = current_data
-                                                        if condition:
-                                                            # Use pandas.query for safe evaluation of conditions
-                                                            filtered_data = current_data.query(condition)
+                                                        # Calculate unique count using pandas
+                                                        unique_count = current_data[agg_col].nunique()
+                                                        response_text = f"The number of unique values in **`{agg_col}`** is: **{unique_count}**"
+                                                        agg_handled = True
+                                                    except Exception as unique_e:
+                                                        response_text = f"Error calculating unique count for '{agg_col}': {unique_e}"
+                                                        logging.error(f"Unique Count Error: {unique_e}", exc_info=True)
+                                                        agg_handled = True # Mark as handled even on error
 
-                                                        if filtered_data.empty and condition:
-                                                            response_text = f"No data matches the condition: {condition}"
-                                                        elif filtered_data.empty:
-                                                             response_text = f"No data available to calculate {agg_func_str} of '{agg_col}'."
-                                                        else:
-                                                            # Perform aggregation
-                                                            target_series = filtered_data[agg_col]
-                                                            result = None
-                                                            if agg_func_str in ["average", "mean"]:
-                                                                # Ensure column is numeric for mean
-                                                                if pd.api.types.is_numeric_dtype(target_series):
-                                                                    result = target_series.mean()
-                                                                else:
-                                                                    response_text = f"Cannot calculate the average of non-numeric column '{agg_col}'."
-                                                            elif agg_func_str == "sum":
-                                                                if pd.api.types.is_numeric_dtype(target_series):
-                                                                    result = target_series.sum()
-                                                                else:
-                                                                    response_text = f"Cannot calculate the sum of non-numeric column '{agg_col}'."
-                                                            elif agg_func_str == "count":
-                                                                result = target_series.count() # Counts non-NA values
-                                                            elif agg_func_str == "min":
-                                                                result = target_series.min()
-                                                            elif agg_func_str == "max":
-                                                                result = target_series.max()
-                                                            elif agg_func_str == "median":
-                                                                if pd.api.types.is_numeric_dtype(target_series):
-                                                                    result = target_series.median()
-                                                                else:
-                                                                    response_text = f"Cannot calculate the median of non-numeric column '{agg_col}'."
-                                                            elif agg_func_str == "std":
-                                                                if pd.api.types.is_numeric_dtype(target_series):
-                                                                    result = target_series.std()
-                                                                else:
-                                                                    response_text = f"Cannot calculate the standard deviation of non-numeric column '{agg_col}'."
+                                            # 2. If not a unique count, try standard aggregations (mean, sum, count, etc.)
+                                            if not agg_handled:
+                                                # Regex looks for standard aggregation functions, column name, and optional 'where' clause
+                                                agg_pattern = re.compile(r"(average|mean|sum|count|min|max|median|std)\s+of\s+`?([\w\s]+)`?(?:\s+where\s+(.*))?", re.IGNORECASE)
+                                                agg_match = agg_pattern.search(details_text) # Use search for flexibility
 
-                                                            if result is not None:
-                                                                # Format result nicely
-                                                                if isinstance(result, float):
-                                                                    result_str = f"{result:,.4f}" # Format floats
-                                                                else:
-                                                                    result_str = str(result)
+                                                if agg_match:
+                                                    agg_func_str = agg_match.group(1).lower()
+                                                    agg_col = agg_match.group(2).strip().strip('`')
+                                                    condition = agg_match.group(3).strip() if agg_match.group(3) else None
 
-                                                                condition_str = f" where {condition}" if condition else ""
-                                                                response_text = f"The {agg_func_str} of **`{agg_col}`**{condition_str} is: **{result_str}**"
-                                                            # else: response_text might already be set with an error message
+                                                    # Validate column name
+                                                    if agg_col not in current_data.columns:
+                                                        response_text = f"Error: Column '{agg_col}' not found in the data for {agg_func_str}."
+                                                    else:
+                                                        try:
+                                                            # Apply filtering if condition exists
+                                                            filtered_data = current_data
+                                                            if condition:
+                                                                # Use pandas.query for safe evaluation of conditions
+                                                                filtered_data = current_data.query(condition)
 
-                                                    except Exception as agg_e:
-                                                        response_text = f"Error performing aggregation: {agg_e}"
-                                                        logging.error(f"Aggregation Error: {agg_e}", exc_info=True)
+                                                            if filtered_data.empty and condition:
+                                                                response_text = f"No data matches the condition: {condition}"
+                                                            elif filtered_data.empty:
+                                                                response_text = f"No data available to calculate {agg_func_str} of '{agg_col}'."
+                                                            else:
+                                                                # Perform aggregation
+                                                                target_series = filtered_data[agg_col]
+                                                                result = None
+                                                                # --- Standard Aggregation Logic ---
+                                                                if agg_func_str in ["average", "mean"]:
+                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.mean()
+                                                                    else: response_text = f"Cannot calculate the average of non-numeric column '{agg_col}'."
+                                                                elif agg_func_str == "sum":
+                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.sum()
+                                                                    else: response_text = f"Cannot calculate the sum of non-numeric column '{agg_col}'."
+                                                                elif agg_func_str == "count": # Standard count (non-NA)
+                                                                    result = target_series.count()
+                                                                elif agg_func_str == "min": result = target_series.min()
+                                                                elif agg_func_str == "max": result = target_series.max()
+                                                                elif agg_func_str == "median":
+                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.median()
+                                                                    else: response_text = f"Cannot calculate the median of non-numeric column '{agg_col}'."
+                                                                elif agg_func_str == "std":
+                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.std()
+                                                                    else: response_text = f"Cannot calculate the standard deviation of non-numeric column '{agg_col}'."
+                                                                # --- End Standard Aggregation Logic ---
 
-                                            else:
-                                                # Fallback if details couldn't be parsed or LLM didn't provide enough
-                                                logging.warning(f"Could not parse aggregation details: {details_text}. Falling back to LLM prompt.")
+                                                                if result is not None:
+                                                                    # Format result nicely
+                                                                    if isinstance(result, float): result_str = f"{result:,.4f}"
+                                                                    else: result_str = str(result)
+                                                                    condition_str = f" where {condition}" if condition else ""
+                                                                    # Clarify if it's standard count vs unique count
+                                                                    func_display = "count (non-missing)" if agg_func_str == "count" else agg_func_str
+                                                                    response_text = f"The {func_display} of **`{agg_col}`**{condition_str} is: **{result_str}**"
+                                                                # else: response_text might already be set with an error message
+
+                                                        except Exception as agg_e:
+                                                            response_text = f"Error performing aggregation '{agg_func_str}' on '{agg_col}': {agg_e}"
+                                                            logging.error(f"Aggregation Error: {agg_e}", exc_info=True)
+                                                    agg_handled = True # Mark as handled
+
+                                            # 3. Fallback if neither unique nor standard aggregation pattern matched
+                                            if not agg_handled:
+                                                logging.warning(f"Could not parse aggregation details: '{details_text}'. Falling back to LLM prompt.")
+                                                # Updated fallback prompt to include unique count example
                                                 aggregation_prompt = f"""
                                                 Context:
                                                 The user is analyzing data with columns: {current_data.columns.tolist()}
@@ -1079,10 +1098,12 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
 
                                                 User Question: '{prompt}'
 
-                                                Based ONLY on the provided sample data and column names, try to answer the user's aggregation question. If you can calculate it from the sample, provide the answer. If the sample is insufficient or the calculation is complex, state that you need to perform a full data calculation and suggest how the user might ask for it (e.g., 'Calculate the average of X'). Do not invent data.
+                                                Based ONLY on the provided sample data and column names, try to answer the user's aggregation question. If you can calculate it from the sample, provide the answer. If the sample is insufficient or the calculation is complex, state that you need to perform a full data calculation and suggest how the user might ask for it (e.g., 'Calculate the average of X', or 'Count unique values in Y'). Do not invent data.
                                                 """
                                                 response_text = content_agent.generate(aggregation_prompt)
-                                            # --- End of Aggregation Modification ---
+                                        # ===========================================================
+                                        # END: MODIFIED AGGREGATION BLOCK
+                                        # ===========================================================
 
                                         elif analysis_type == "General Insight":
                                              response_text = generate_data_report(current_data) # Reuse the report function
@@ -1121,8 +1142,8 @@ if st.session_state.data is not None or st.session_state.selected_table is not N
                                     elif key_lower == 'target' or key_lower == 'column': target_col = val_stripped
                                     elif key_lower == 'hue' or key_lower == 'color': hue_col = val_stripped
 
-                                # If only one column mentioned for histogram/box/dist, assume it's the target
-                                if not target_col and not x_col and not y_col and cols_text and "Target=Unspecified" not in cols_text and plot_type in ['histogram', 'boxplot', 'distribution', 'bar']: # Added 'bar' here
+                                # If only one column mentioned for histogram/box/dist/bar, assume it's the target
+                                if not target_col and not x_col and not y_col and cols_text and "Target=Unspecified" not in cols_text and plot_type in ['histogram', 'boxplot', 'distribution', 'bar']:
                                     potential_col = cols_text.strip().strip('`\'"')
                                     if potential_col in current_data.columns:
                                          target_col = potential_col
