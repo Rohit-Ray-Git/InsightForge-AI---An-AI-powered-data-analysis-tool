@@ -1154,8 +1154,15 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                                             response_text = "\n".join(response_lines)
 
                                         elif analysis_type == "List Columns by Type":
+                                            # --- FIXED EXTRACTION ---
                                             details_match = re.search(r"Details:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
-                                            requested_type_str = details_match.group(1).strip().lower() if details_match else None
+                                            requested_type_str = None # Initialize
+                                            if details_match:
+                                                # Extract, strip whitespace, remove potential list/quote chars, convert to lower
+                                                extracted_detail = details_match.group(1).strip()
+                                                requested_type_str = extracted_detail.strip("[]'\"").strip().lower()
+                                                logging.info(f"Extracted and cleaned requested type: '{requested_type_str}' from detail: '{extracted_detail}'") # Add logging
+                                            # --- END FIXED EXTRACTION ---
 
                                             if requested_type_str:
                                                 matching_columns = []
@@ -1186,8 +1193,15 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                                                         'bool': pd.api.types.is_bool_dtype,
                                                     }
                                                     check_func = type_map.get(requested_type_str)
-                                                    if check_func and check_func(dtype):
-                                                        matching_columns.append(f"`{col}` (`{dtype}`)")
+                                                    # Add logging for debugging the check
+                                                    if check_func:
+                                                        is_match_result = check_func(dtype)
+                                                        logging.debug(f"Checking col '{col}' (dtype: {dtype}) against type '{requested_type_str}': Result={is_match_result}")
+                                                        if is_match_result:
+                                                            matching_columns.append(f"`{col}` (`{dtype}`)")
+                                                    else:
+                                                         logging.warning(f"No check function found in type_map for requested type: '{requested_type_str}'")
+
 
                                                 if matching_columns:
                                                     response_text = f"Columns with data type matching **{requested_type_str}**:\n- " + "\n- ".join(matching_columns)
