@@ -9,16 +9,21 @@ import numpy as np
 import json
 import logging
 import io # Used for StringIO buffer
+from dotenv import load_dotenv # Import load_dotenv
 
-# Import Agents (ensure paths are correct relative to main.py)
+# Import Agents
 from agents.database_agent import DatabaseAgent
 from agents.web_scraping_agent import WebScrapingAgent
-# IMPORTANT: Ensure VisualizationAgent methods return (path: str|None, description: str)
 from agents.visualization_agent import VisualizationAgent
 from agents.content_generation_agent import ContentGenerationAgent
 from agents.report_generation_agent import ReportGenerationAgent
 from agents.analysis_agent import AnalysisAgent
 from agents.data_cleaning_agent import DataCleaningAgent
+
+# --- Load Environment Variables ---
+load_dotenv() # Load variables from .env file into environment
+logging.info(".env file loaded.") # Add log to confirm
+# --- End Load Environment Variables ---
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -237,15 +242,33 @@ def get_db_data(table_name):
             try:
                 original_dtype = df[col].dtype
                 # Use infer_objects to handle mixed types better initially
-                df[col] = pd.to_numeric(df[col].astype(str).str.strip(), errors='ignore') # Try converting string representations
-                # If conversion happened, log it
-                if df[col].dtype != original_dtype and pd.api.types.is_numeric_dtype(df[col]):
-                     logging.debug(f"Column '{col}': Converted to numeric ({df[col].dtype}).")
+                # df[col] = pd.to_numeric(df[col].astype(str).str.strip(), errors='ignore') # Try converting string representations
+                numeric_series = pd.to_numeric(df[col].astype(str).str.strip(), errors='coerce')
+
+                # Check if conversion to numeric happened AND if all valid numbers are integers
+                if numeric_series.notna().any() and (numeric_series.dropna() % 1 == 0).all():
+                    # Try converting to nullable integer type Int64
+                    try:
+                        df[col] = numeric_series.astype('Int64')
+                        if df[col].dtype != original_dtype:
+                            logging.debug(f"Column '{col}': Converted to nullable integer (Int64).")
+                    except Exception as int_e:
+                        logging.warning(f"Could not convert column '{col}' to Int64 after numeric check, falling back to float/object. Error: {int_e}")
+                        # If Int64 fails, keep as numeric (float) if possible
+                        if pd.api.types.is_numeric_dtype(numeric_series):
+                            df[col] = numeric_series
+                            if df[col].dtype != original_dtype:
+                                logging.debug(f"Column '{col}': Kept as numeric ({df[col].dtype}) after Int64 conversion failed.")
+                elif pd.api.types.is_numeric_dtype(numeric_series) and numeric_series.dtype != original_dtype:
+                    # If not all integers or conversion failed, but it's numeric, keep it
+                    df[col] = numeric_series
+                    logging.debug(f"Column '{col}': Converted to numeric ({df[col].dtype}).")
+
             except Exception as e:
-                logging.warning(f"Numeric conversion failed for column '{col}': {e}")
+                logging.warning(f"Numeric/Integer conversion failed for column '{col}': {e}")
 
             # Attempt datetime conversion if not numeric (handle potential errors)
-            if not pd.api.types.is_numeric_dtype(df[col]):
+            if not pd.api.types.is_numeric_dtype(df[col]) and not pd.api.types.is_integer_dtype(df[col]): # Check not already Int64
                 try:
                     original_dtype = df[col].dtype
                     # Try converting, ignore if it fails
@@ -257,9 +280,11 @@ def get_db_data(table_name):
                     logging.warning(f"Datetime conversion attempt failed for column '{col}': {e}")
 
             # Convert object columns with low cardinality to category
+            # Check if still object after numeric/datetime attempts
             if pd.api.types.is_object_dtype(df[col]):
                  num_unique = df[col].nunique()
-                 if num_unique / len(df) < 0.5 and num_unique < 100: # Heuristic for categorization
+                 # Adjust heuristic slightly: check if len(df) > 0
+                 if len(df) > 0 and num_unique / len(df) < 0.5 and num_unique < 100: # Heuristic for categorization
                      try:
                          df[col] = df[col].astype('category')
                          logging.debug(f"Column '{col}': Converted to category.")
@@ -279,12 +304,14 @@ def compute_statistics(data):
     """Compute statistical summary for numeric columns in the DataFrame."""
     if data is None or data.empty:
         return {}
-    numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
+    # Include Pandas nullable integers (Int64) and standard integers/floats
+    numeric_cols = data.select_dtypes(include=[np.number, 'Int64']).columns.tolist()
     if not numeric_cols:
         return {}
 
     stats = {}
     for col in numeric_cols:
+        # Convert to float for calculations, coercing errors and dropping NaNs
         col_data = pd.to_numeric(data[col], errors='coerce').dropna()
         if not col_data.empty:
             stats[col] = {
@@ -395,13 +422,16 @@ def generate_data_report(data):
     llm_context_summary += f"Categorical Columns Analyzed: {list(categorical_insights.keys())}\n"
     # Add key stats if available
     if numeric_stats:
-        first_num_col = list(numeric_stats.keys())[0]
-        llm_context_summary += f"Example Numeric Stats ({first_num_col}): Mean={numeric_stats[first_num_col].get('mean', 'N/A')}, Median={numeric_stats[first_num_col].get('median', 'N/A')}\n"
+        # Find first numeric column to show example
+        first_num_col = next((col for col in data.columns if col in numeric_stats), None)
+        if first_num_col:
+            llm_context_summary += f"Example Numeric Stats ({first_num_col}): Mean={numeric_stats[first_num_col].get('mean', 'N/A')}, Median={numeric_stats[first_num_col].get('median', 'N/A')}\n"
     if categorical_insights:
-        first_cat_col = list(categorical_insights.keys())[0]
-        top_val_info = categorical_insights[first_cat_col]['top_values']
-        if top_val_info:
-             llm_context_summary += f"Example Categorical Stats ({first_cat_col}): Top value='{top_val_info[0]['value']}' ({top_val_info[0]['count']} counts)\n"
+        first_cat_col = next((col for col in data.columns if col in categorical_insights), None)
+        if first_cat_col:
+            top_val_info = categorical_insights[first_cat_col]['top_values']
+            if top_val_info:
+                 llm_context_summary += f"Example Categorical Stats ({first_cat_col}): Top value='{top_val_info[0]['value']}' ({top_val_info[0]['count']} counts)\n"
 
     insight_prompt = (
         f"Based on the following analysis summary of the data:\n{llm_context_summary}\n"
@@ -892,7 +922,72 @@ elif st.session_state.data_source == "📁 Upload File":
         if load_new_file:
              try:
                  with st.spinner(f"Loading and analyzing '{uploaded_file.name}'..."):
-                     st.session_state.data = pd.read_csv(uploaded_file)
+                     # --- Load and Apply Type Conversion ---
+                     df_loaded = pd.read_csv(uploaded_file) # Load into temporary variable
+                     logging.info(f"CSV '{uploaded_file.name}' loaded. Initial dtypes:\n{df_loaded.dtypes}")
+
+                     # --- Start: Copy Type Conversion Logic from get_db_data ---
+                     logging.info(f"Attempting type conversion for CSV '{uploaded_file.name}'...")
+                     for col in df_loaded.columns:
+                         # Attempt numeric conversion first (handle potential errors)
+                         try:
+                             original_dtype = df_loaded[col].dtype
+                             # Use infer_objects to handle mixed types better initially
+                             numeric_series = pd.to_numeric(df_loaded[col].astype(str).str.strip(), errors='coerce')
+
+                             # Check if conversion to numeric happened AND if all valid numbers are integers
+                             if numeric_series.notna().any() and (numeric_series.dropna() % 1 == 0).all():
+                                 # Try converting to nullable integer type Int64
+                                 try:
+                                     df_loaded[col] = numeric_series.astype('Int64')
+                                     if df_loaded[col].dtype != original_dtype:
+                                         logging.debug(f"Column '{col}': Converted to nullable integer (Int64).")
+                                 except Exception as int_e:
+                                     logging.warning(f"Could not convert column '{col}' to Int64 after numeric check, falling back to float/object. Error: {int_e}")
+                                     # If Int64 fails, keep as numeric (float) if possible
+                                     if pd.api.types.is_numeric_dtype(numeric_series):
+                                         df_loaded[col] = numeric_series
+                                         if df_loaded[col].dtype != original_dtype:
+                                             logging.debug(f"Column '{col}': Kept as numeric ({df_loaded[col].dtype}) after Int64 conversion failed.")
+                             elif pd.api.types.is_numeric_dtype(numeric_series) and numeric_series.dtype != original_dtype:
+                                 # If not all integers or conversion failed, but it's numeric, keep it
+                                 df_loaded[col] = numeric_series
+                                 logging.debug(f"Column '{col}': Converted to numeric ({df_loaded[col].dtype}).")
+
+                         except Exception as e:
+                             logging.warning(f"Numeric/Integer conversion failed for column '{col}': {e}")
+
+                         # Attempt datetime conversion if not numeric (handle potential errors)
+                         if not pd.api.types.is_numeric_dtype(df_loaded[col]) and not pd.api.types.is_integer_dtype(df_loaded[col]): # Check not already Int64
+                             try:
+                                 original_dtype = df_loaded[col].dtype
+                                 # Try converting, ignore if it fails
+                                 df_loaded[col] = pd.to_datetime(df_loaded[col], errors='ignore')
+                                 if df_loaded[col].dtype != original_dtype and pd.api.types.is_datetime64_any_dtype(df_loaded[col]):
+                                      logging.debug(f"Column '{col}': Converted to datetime ({df_loaded[col].dtype}).")
+                             except Exception as e:
+                                 # Datetime conversion can be complex, log warning but continue
+                                 logging.warning(f"Datetime conversion attempt failed for column '{col}': {e}")
+
+                         # Convert object columns with low cardinality to category
+                         # Check if still object after numeric/datetime attempts
+                         if pd.api.types.is_object_dtype(df_loaded[col]):
+                              num_unique = df_loaded[col].nunique()
+                              # Adjust heuristic slightly: check if len(df_loaded) > 0
+                              if len(df_loaded) > 0 and num_unique / len(df_loaded) < 0.5 and num_unique < 100: # Heuristic for categorization
+                                  try:
+                                      df_loaded[col] = df_loaded[col].astype('category')
+                                      logging.debug(f"Column '{col}': Converted to category.")
+                                  except Exception as e:
+                                       logging.warning(f"Category conversion failed for column '{col}': {e}")
+
+                     logging.info(f"Type conversion finished for CSV. Final dtypes:\n{df_loaded.dtypes}")
+                     # --- End: Copy Type Conversion Logic ---
+
+                     # Store the converted DataFrame in session state
+                     st.session_state.data = df_loaded
+                     # --- END Type Conversion Application ---
+
                      st.session_state.uploaded_file_name = uploaded_file.name
                      st.session_state.selected_table = None # Clear DB selection
                      st.session_state.chat_history = [] # Reset chat
@@ -1028,10 +1123,17 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                 if data_available and current_data is not None:
                     columns = current_data.columns.tolist()
                     source_info = f"data loaded from file '{st.session_state.get('uploaded_file_name', 'unknown file')}'" if st.session_state.data_source == "📁 Upload File" else f"database table `{current_table}`"
-                    data_context = f"The user is currently working with {source_info}. The columns are: {columns}."
-                    # Provide sample data for context
+                    # Generate a concise summary of the data for context
+                    buffer_info = io.StringIO()
+                    current_data.info(buf=buffer_info)
+                    data_info_str = buffer_info.getvalue()
                     sample_data_head = current_data.head().to_string()
-                    data_context += f"\nSample Data:\n{sample_data_head}"
+                    data_context = (
+                        f"The user is currently working with {source_info}.\n"
+                        f"Data Summary:\nShape: {current_data.shape}\n"
+                        f"Columns & Types:\n{data_info_str}\n"
+                        f"Sample Data:\n{sample_data_head}"
+                    )
                 elif st.session_state.data_source == "🛢️ Database" and current_table: # DB selected, but data fetch failed/empty
                     schema_info_str = str(st.session_state.get('schema_info', 'Not available'))
                     data_context = f"The user is currently working with the database table `{current_table}`. The database is MySQL. Schema info: {schema_info_str}. Data is not currently loaded in memory or is empty."
@@ -1081,7 +1183,8 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                     Plan: Visualization Prompt: {prompt}
 
                 - If Web Research:
-                    - Plan: Topic: [Extract the research topic]
+                    # Extract a concise topic based on the user prompt and the data context provided above.
+                    Plan: Topic: [Extract the research topic, e.g., 'current market conditions for data science salaries US 2024']
 
                 - If General Chit-chat/Unclear:
                     - Plan: General Response: True
@@ -1225,12 +1328,13 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                                             response_text = response_text.split("**AI Generated Insight:**")[0].strip()
 
                                         elif analysis_type == "Correlation":
-                                            numeric_df = current_data.select_dtypes(include=np.number)
+                                            numeric_df = current_data.select_dtypes(include=[np.number, 'Int64']) # Include Int64
                                             if numeric_df.shape[1] < 2:
                                                  response_text = "Need at least two numeric columns for correlation analysis."
                                             else:
                                                  # Call the specific heatmap generation method
-                                                 image_path, plot_description = viz_agent.generate_correlation_heatmap(current_data)
+                                                 image_path, plot_description = viz_agent.generate_correlation_heatmap(current_data) # Pass original data
+                                                 # Calculate correlation on numeric subset for display text
                                                  corr_matrix = numeric_df.corr()
                                                  response_text = "**Correlation Matrix:**\n```\n" + corr_matrix.to_string() + "\n```"
                                                  if image_path and os.path.exists(image_path):
@@ -1244,7 +1348,7 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                                                      image_path = None
 
                                         elif analysis_type == "Outlier Check":
-                                            numeric_cols = current_data.select_dtypes(include=np.number).columns
+                                            numeric_cols = current_data.select_dtypes(include=[np.number, 'Int64']).columns # Include Int64
                                             outlier_details = []
                                             found_outliers = False
                                             if not numeric_cols.empty:
@@ -1317,24 +1421,26 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                                                                 response_text = f"No data matches the condition: `{condition}`" if condition else "No data available for aggregation."
                                                             else:
                                                                 target_series = filtered_data[agg_col]
+                                                                # Convert target series to numeric for calculations if possible
+                                                                numeric_target_series = pd.to_numeric(target_series, errors='coerce')
                                                                 result = None
                                                                 error_msg = None
 
                                                                 if agg_func_str in ["average", "mean"]:
-                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.mean()
-                                                                    else: error_msg = f"Cannot calculate average of non-numeric column '{agg_col}'."
+                                                                    if not numeric_target_series.isnull().all(): result = numeric_target_series.mean()
+                                                                    else: error_msg = f"Cannot calculate average of non-numeric or all-NaN column '{agg_col}'."
                                                                 elif agg_func_str == "sum":
-                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.sum()
-                                                                    else: error_msg = f"Cannot calculate sum of non-numeric column '{agg_col}'."
-                                                                elif agg_func_str == "count": result = target_series.count() # Count non-NA
-                                                                elif agg_func_str == "min": result = target_series.min()
-                                                                elif agg_func_str == "max": result = target_series.max()
+                                                                    if not numeric_target_series.isnull().all(): result = numeric_target_series.sum()
+                                                                    else: error_msg = f"Cannot calculate sum of non-numeric or all-NaN column '{agg_col}'."
+                                                                elif agg_func_str == "count": result = target_series.count() # Count non-NA original values
+                                                                elif agg_func_str == "min": result = target_series.min() # Min on original series
+                                                                elif agg_func_str == "max": result = target_series.max() # Max on original series
                                                                 elif agg_func_str == "median":
-                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.median()
-                                                                    else: error_msg = f"Cannot calculate median of non-numeric column '{agg_col}'."
+                                                                    if not numeric_target_series.isnull().all(): result = numeric_target_series.median()
+                                                                    else: error_msg = f"Cannot calculate median of non-numeric or all-NaN column '{agg_col}'."
                                                                 elif agg_func_str == "std":
-                                                                    if pd.api.types.is_numeric_dtype(target_series): result = target_series.std()
-                                                                    else: error_msg = f"Cannot calculate standard deviation of non-numeric column '{agg_col}'."
+                                                                    if not numeric_target_series.isnull().all(): result = numeric_target_series.std()
+                                                                    else: error_msg = f"Cannot calculate standard deviation of non-numeric or all-NaN column '{agg_col}'."
 
                                                                 if error_msg:
                                                                      response_text = error_msg
@@ -1410,14 +1516,39 @@ if st.session_state.data_source and (st.session_state.data is not None or st.ses
                                 image_path = None
                             # --- End Visualization Agent Call ---
 
+                    # --- MODIFIED WEB RESEARCH HANDLING ---
                     elif category == "Web Research":
                         topic_match = re.search(r"Topic:\s*(.*)", plan, re.IGNORECASE | re.DOTALL)
                         if topic_match:
                             topic = topic_match.group(1).strip()
-                            with st.spinner(f"Researching '{topic}'..."):
-                                 response_text = web_agent.research(topic)
+                            try: # Add try...except specifically around the agent call
+                                with st.spinner(f"Researching '{topic}'..."):
+                                     research_result = web_agent.research(topic) # Call the agent
+
+                                # Check if the agent returned an error string
+                                if research_result.startswith("Error:"):
+                                     response_text = research_result # Display the agent's error directly
+                                else:
+                                     # If successful, pass the results to the content agent for synthesis
+                                     synthesis_prompt = f"""
+                                     Here is the analysis of the user's data:
+                                     {data_context}
+
+                                     Here are the findings from a web search on '{topic}':
+                                     {research_result}
+
+                                     Synthesize these findings. Compare the user's data (especially salaries, locations, roles, experience levels, remote work ratio) to the current market conditions found in the web search. Provide a concise summary (2-3 paragraphs) highlighting key similarities, differences, and potential recommendations for the user based on this comparison. Focus on actionable insights.
+                                     """
+                                     with st.spinner("Synthesizing insights..."):
+                                          response_text = content_agent.generate(synthesis_prompt)
+
+                            except Exception as e:
+                                 # Catch unexpected errors during the agent call itself
+                                 logging.error(f"Error calling WebScrapingAgent: {e}", exc_info=True)
+                                 response_text = f"An unexpected error occurred while trying to perform the web search: {e}"
                         else:
                             response_text = "I understood you want web research, but I couldn't extract the topic from the plan."
+                    # --- END MODIFIED WEB RESEARCH HANDLING ---
 
                     elif category == "General Chit-chat/Unclear":
                          # Use LLM for a general response
